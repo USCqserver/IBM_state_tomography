@@ -121,31 +121,46 @@ def write_state_tomo_dd_qasms(**kwargs):
         f.write('measure q[%d] -> c[%d];\n'%(i,i))
     f.close
 
-circuitPath = r"../../Circuits/"
-device = "ibmq_armonk"
+circuitPath = r"../Circuits/"
+device = "ibmqx2"
 
-# runname = 'stateTomo_freeEvo'
+runname = 'stateTomo_freeEvo'
+measurement_basis = list(meas_params.keys())
+# folder /device/date/state_tomography_freeEvo/
+pstate = 'XplusState'
+
+# dense sampling rate
+num_repetition = 48
+num_complete = 0 # completed circuits
+sampling_rate = 12
+for r in range(num_complete,num_repetition):
+    numIdGates = sampling_rate * r
+    for mbasis in measurement_basis:
+        dict0 = construct_exp_dict(runname=runname,device=device,pstate=pstate,mbasis=mbasis,circuitPath=circuitPath,numIdGates=numIdGates)
+        write_state_tomo_qasms(exp_dict=dict0)
+
+# sparse sampling rate
+num_repetition = 61
+num_complete = 60 # completed circuits
+sampling_rate = 24
+offset = 600
+for r in range(num_complete,num_repetition):
+    numIdGates = sampling_rate * r + offset
+    for mbasis in measurement_basis:
+        dict0 = construct_exp_dict(runname=runname,device=device,pstate=pstate,mbasis=mbasis,circuitPath=circuitPath,numIdGates=numIdGates)
+        write_state_tomo_qasms(exp_dict=dict0)
+
+## DD circtuis
+# runname = 'stateTomo_DD'
 # measurement_basis = list(meas_params.keys())
 # # folder /device/date/state_tomography_freeEvo/
 # pstate = 'XplusState'
 # num_repetition = 301
-# num_complete = 300
+# num_complete = 0
 # for r in range(num_complete,num_repetition):
-#     numIdGates = 4*r
 #     for mbasis in measurement_basis:
-#         dict0 = construct_exp_dict(runname=runname,device=device,pstate=pstate,mbasis=mbasis,circuitPath=circuitPath,numIdGates=numIdGates)
-#         write_state_tomo_qasms(exp_dict=dict0)
-
-runname = 'stateTomo_DD'
-measurement_basis = list(meas_params.keys())
-# folder /device/date/state_tomography_freeEvo/
-pstate = 'XplusState'
-num_repetition = 301
-num_complete = 0
-for r in range(num_complete,num_repetition):
-    for mbasis in measurement_basis:
-        dict0 = construct_dd_exp_dict(runname=runname,device=device,pstate=pstate,mbasis=mbasis,circuitPath=circuitPath,numDDrep=r)
-        write_state_tomo_dd_qasms(exp_dict=dict0)
+#         dict0 = construct_dd_exp_dict(runname=runname,device=device,pstate=pstate,mbasis=mbasis,circuitPath=circuitPath,numDDrep=r)
+#         write_state_tomo_dd_qasms(exp_dict=dict0)
 
 
 
