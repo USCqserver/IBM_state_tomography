@@ -25,7 +25,7 @@ qubits = [0]  # the list of qubits to perform tomography on
 nsamples = 8192
 # an example datafile
 datafile = r"stateTomo_freeEvo_11062020_ibmq_armonk_numIdGates=0_XplusState_obsX_5ee267acc926d60014453300.txt"
-idGateTime = {'ibmqx2': 3.555555555555556e-02,
+idGateTime = {'ibmqx2': 3.555555555555556e-02, # in us
               'ibmq_armonk': 1.4222222222222224e-01}
 
 def make_one_hist(datapath,qubiti,shots):
@@ -165,7 +165,7 @@ class StateTomographyFit:
         self.config = None
         self.qindex = None
 
-    def fit_state_from_run(self,datapath,exp0,qubiti):
+    def fit_state_from_run(self,datapath,exp0,qubiti,polar=False):
         """
         fit qubit time evlotion tomography from raw data
         :param datapath: raw data path, str
@@ -226,7 +226,7 @@ class StateTomographyFit:
                 elif method == 'ibm':
                     tomo_result = ibm_tomography(histograms)
                     self.rhomat.append(tomo_result.transpose().flatten())
-                    self.bloch.append(rho2BlochVec(tomo_result,polar=False))
+                    self.bloch.append(rho2BlochVec(tomo_result,polar=polar))
 
             else:
                 print("did not find all three config for tomography at id=%s"%(numIdGates))
@@ -251,7 +251,7 @@ class StateTomographyFit:
         return self.idlist * gatetime
 
     def plot_bloch_vector(self,save=False,spacing=1,**kwargs):
-        self.tlist = self.Gate2Time(gatetime=35)
+        self.tlist = self.Gate2Time(gatetime=idGateTime[exp0.device])
         fig, ax = plt.subplots(ncols=1, nrows=1)
         fig.set_size_inches(7, 5)
         if 'polar' in kwargs:
@@ -298,7 +298,7 @@ class StateTomographyFit:
 
 
     def plot_denisty_matrix(self,save=False,**kwargs):
-        self.tlist = self.Gate2Time(gatetime=35)
+        self.tlist = self.Gate2Time(gatetime=idGateTime[exp0.device])
         fig, axs = plt.subplots(ncols=2, nrows=1)
         fig.set_size_inches(5 * 2, 5)
         labels = [r'$\rho_{00}$',r'$\rho_{10}$',r'$\rho_{01}$',r'$\rho_{11}$']
@@ -361,6 +361,25 @@ class StateTomographyFit:
             writer.writerow(header)
             writer.writerows(data)
 
+    def blochInPolarCoordinate(self, truncate,plot=True):
+        samples_polar = np.zeros(self.bloch.shape, dtype=float)
+        for i in range(self.bloch.shape[1]):
+            samples_polar[:, i] = blochInPolarCoordinate(self.bloch[:, i])
+        if plot:
+            fig, axes = plt.subplots(ncols=3, nrows=1, figsize=(3 * 6, 6))
+            labels = [r'$|v|$', r'$\theta$', r'$\phi$']
+            for i in range(3):
+                axes[i].plot(self.tlist, samples_polar[i, :], '-s', label=labels[i], color=mycolor[ckeys[i]],
+                             markersize=3, markeredgewidth=0.3, markeredgecolor=mycolor['black'])
+                axes[i].set_xlabel(r'Time ($\mu$s)')
+                axes[i].legend(loc=1)
+                axes[i].set_xlim(0,truncate)
+            plt.show()
+            plt.close()
+        return samples_polar
+
+
+
 
 num_qubits = len(qubits)
 dimension = 2 ** num_qubits
@@ -382,20 +401,21 @@ ckeys = list(mycolor.keys())
 # read date from
 datapath = r'/home/haimeng/LocalProjects/IBM-PMME/Data/raw/'
 # raw data info
-exp0 = ExpObject(runname='stateTomo_freeEvo', datestr='09052020', device='ibmqx2', pstate='XplusState',
-                 runNo='run-sum')
+exp0 = ExpObject(runname='stateTomo_freeEvo', datestr='11062020', device='ibmq_armonk', pstate='XplusState',
+                 runNo='run1-partial')
 datapath = r"/home/haimeng/LocalProjects/IBM-PMME/Data/raw/" + exp0.device + "/" + exp0.datestr + "/" + exp0.runname + "/" + exp0.runNo +"/"
 # store date to
 filepath = r"/home/haimeng/LocalProjects/IBM-PMME/Analysis/" + exp0.device + "/" + exp0.datestr + '/'
 tomo_fit = StateTomographyFit()
-for i in range(5):
-    tomo_fit.fit_state_from_run(datapath,exp0,qubiti=[i])
+for i in range(1):
+    tomo_fit.fit_state_from_run(datapath,exp0,qubiti=[i],polar=False)
 
     # change where x-axis stops using keyword argument 'idMax';
     # change x-axis resolution using argument 'spacing', sampling frequency equals 1 sample per spacing*4 Id gates
-    tomo_fit.plot_bloch_vector(save=True,filepath=filepath,idMax=1200,spacing=1,polar=False)
+    tomo_fit.plot_bloch_vector(save=True,filepath=filepath,spacing=1,polar=False)
+    tomo_fit.blochInPolarCoordinate(truncate=58)
     #tomo_fit.plot_denisty_matrix(save=False,filepath=filepath,spacing=2)
-    tomo_fit.saveBloch2csv(filepath,polar=False)
+    # tomo_fit.saveBloch2csv(filepath,polar=True)
     # tomo_fit.save2csv(filepath)
     # tomo_fit.saveRho2csv(filepath)
     # import pickle

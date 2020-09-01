@@ -60,7 +60,7 @@ def write_state_tomo_qasms(**kwargs):
         os.makedirs(exp_dict["filepath"])
     numQubits = device_numQubit[exp_dict['device']]
     barrierStr = 'barrier %s;\n'%(write_qubit_index(numQubits))
-    idStr = 'id %s;\n'%(write_qubit_index(numQubits))
+    idStr = lambda q: 'id q[%s];\n'%(q)
     f = open(exp_dict["filepath"] + exp_dict["filename"], "w")
     # header for 5 qubit
     f.write("OPENQASM 2.0;\ninclude\"qelib1.inc\";\nqreg q[%s];\ncreg c[%s];\n"%(numQubits,numQubits))
@@ -71,7 +71,8 @@ def write_state_tomo_qasms(**kwargs):
         f.write(prepGateStr + ' ' + qubitStr +';\n')
     for d in range(exp_dict["numIdGates"]):
         f.write(barrierStr)
-        f.write(idStr)
+        for i in range(numQubits):
+            f.write(idStr(i))
     # pre-measurement rotation
     if meas_params[exp_dict["mbasis"]] is not None:
         f.write(barrierStr)
@@ -122,7 +123,7 @@ def write_state_tomo_dd_qasms(**kwargs):
     f.close
 
 circuitPath = r"../Circuits/"
-device = "ibmqx2"
+device = "ibmq_armonk"
 
 runname = 'stateTomo_freeEvo'
 measurement_basis = list(meas_params.keys())
@@ -141,7 +142,7 @@ for r in range(num_complete,num_repetition):
 
 # sparse sampling rate
 num_repetition = 61
-num_complete = 60 # completed circuits
+num_complete = 0 # completed circuits, starts with 0
 sampling_rate = 24
 offset = 600
 for r in range(num_complete,num_repetition):

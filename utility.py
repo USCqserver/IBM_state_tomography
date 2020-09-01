@@ -5,7 +5,7 @@ to work with Matt's IBM tomography fitter
 from collections import namedtuple
 import glob
 import numpy as np
-
+from math import atan2, acos
 ExpObject = namedtuple('ExpObject', ['runname', 'datestr', 'device', 'pstate', 'runNo'])
 
 def locate_datafile(expobj,obs,numIdGates):
@@ -50,3 +50,9 @@ def hist2dict(histograms,basisStrListIN):
     sort_hist = {basisStrListIN[0]: histograms[1] , basisStrListIN[1]: histograms[2], basisStrListIN[2]: histograms[0]}
     hist_dict = [{'1': int(sort_hist[key][1]),'0':int(sort_hist[key][0])} for key in sort_hist.keys()]
     return hist_dict
+
+def blochInPolarCoordinate(vector):
+    v = np.sqrt(np.sum(vector ** 2))
+    theta = acos(vector[2] / v)/np.pi
+    phi = atan2(vector[1] , vector[0])/np.pi
+    return np.array([v, theta, phi])
