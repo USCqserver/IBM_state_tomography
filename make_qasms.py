@@ -86,6 +86,21 @@ def write_state_tomo_qasms(**kwargs):
         f.write('measure q[%d] -> c[%d];\n'%(i,i))
     f.close
 
+def write_measurement_error_mitigation_qasm(**kwargs):
+    if "exp_dict" in kwargs:
+        exp_dict = kwargs.get("exp_dict")
+    else:
+        print("input dictionary name error")
+    if not os.path.exists(exp_dict["filepath"]):
+        os.makedirs(exp_dict["filepath"])
+    numQubits = device_numQubit[exp_dict['device']]
+    barrierStr = 'barrier %s;\n'%(write_qubit_index(numQubits))
+    f = open(exp_dict["filepath"] + exp_dict["filename"], "w")
+    # header for 5 qubit
+    f.write("OPENQASM 2.0;\ninclude\"qelib1.inc\";\nqreg q[%s];\ncreg c[%s];\n"%(numQubits,numQubits))
+    # z basis state prep
+
+
 def write_state_tomo_dd_qasms(**kwargs):
     if "exp_dict" in kwargs:
         exp_dict = kwargs.get("exp_dict")
