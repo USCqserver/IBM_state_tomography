@@ -6,7 +6,9 @@ from math import pi
 import os
 
 rdigit = 5
-prep_params = {"XplusState": (str(round(pi,rdigit)),str(0))}
+prep_params = {"XplusState": (str(round(pi,rdigit)),str(0)),
+               'XminusState':()}
+
 meas_params = {"obsZ": None,
         "obsX": (str(round(pi,rdigit)),str(0)),
         "obsY": (str(0),str(round(3*pi/2,rdigit)))}
@@ -100,6 +102,10 @@ def write_measurement_error_mitigation_qasm(**kwargs):
     f.write("OPENQASM 2.0;\ninclude\"qelib1.inc\";\nqreg q[%s];\ncreg c[%s];\n"%(numQubits,numQubits))
     # z basis state prep
 
+    # measurement basis post rotation
+    # measure
+
+
 
 def write_state_tomo_dd_qasms(**kwargs):
     if "exp_dict" in kwargs:
@@ -145,7 +151,7 @@ measurement_basis = list(meas_params.keys())
 # folder /device/date/state_tomography_freeEvo/
 pstate = 'XplusState'
 
-# dense sampling rate
+# # dense sampling rate
 num_repetition = 48
 num_complete = 0 # completed circuits
 sampling_rate = 12
@@ -155,7 +161,7 @@ for r in range(num_complete,num_repetition):
         dict0 = construct_exp_dict(runname=runname,device=device,pstate=pstate,mbasis=mbasis,circuitPath=circuitPath,numIdGates=numIdGates)
         write_state_tomo_qasms(exp_dict=dict0)
 
-# sparse sampling rate
+# # sparse sampling rate
 num_repetition = 61
 num_complete = 0 # completed circuits, starts with 0
 sampling_rate = 24
