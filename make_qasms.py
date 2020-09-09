@@ -6,12 +6,16 @@ from math import pi
 import os
 
 rdigit = 5
-prep_params = {"XplusState": (str(round(pi,rdigit)),str(0)),
-               'XminusState':()}
-
+prep_params = {"XplusState": ('u2',str(0),str(round(pi,rdigit))),
+               'XminusState':('u2',str(round(pi,rdigit)),str(0)),
+               'YplusState':('u2',str(round(pi/2,rdigit)),str(round(pi/2,rdigit))),
+               'YminusState':('u2',str(round(-pi/2,rdigit)),str(round(-pi/2,rdigit))),
+               'ZplusState':None,
+               'ZminusState':('u3',str(round(pi,rdigit)),str(-round(pi/2,rdigit)),str(round(pi/2,rdigit)))}
+# measurement gates are all u2 gate
 meas_params = {"obsZ": None,
-        "obsX": (str(round(pi,rdigit)),str(0)),
-        "obsY": (str(0),str(round(3*pi/2,rdigit)))}
+        "obsX": (str(0),str(round(pi,rdigit))),
+        "obsY": (str(0),str(round(pi/2,rdigit)))}
 
 device_numQubit = {'ibmqx2':5,
                           'ibmq_armonk':1}
@@ -19,17 +23,22 @@ device_numQubit = {'ibmqx2':5,
 ddGateStr = {'X': 'u3(3.141592653589793,0,3.141592653589793)',
            'Y': 'u3(3.141592653589793,1.5707963267948966,1.5707963267948966)'}
 
-def construct_exp_dict(runname,device,pstate,numIdGates,mbasis,circuitPath):
+def construct_exp_dict(runname,device,pstate,mbasis,circuitPath,**kwargs):
     """
     make the experiment configuration dict
     """
     today = date.today()
     datestr = today.strftime("%d%m%Y")
-    exp_dict = {"runname": runname, "date": datestr, "device": device, "numIdGates": numIdGates,
-                "pstate": pstate, "mbasis": mbasis, "circuitPath": circuitPath,
-                "filename": runname + '_' + datestr + '_' + device + '_' + 'numIdGates=' + str(
-                    numIdGates) + '_' + pstate + '_' + mbasis + '.qasm',
+    exp_dict = {"runname": runname, "date": datestr, "device": device,
+                 "circuitPath": circuitPath,'pstate': pstate, 'mbasis': mbasis,
                 "filepath": circuitPath + device + '/' + datestr + '/' + runname + '/'}
+
+    if 'numIdGates' in kwargs:
+        exp_dict['numIdGates'] = kwargs.get('numIdGates')
+        exp_dict["filename"]= runname + '_' + datestr + '_' + device + '_' + 'numIdGates=' + str(
+            exp_dict['numIdGates']) + '_' + exp_dict['pstate'] + '_' + exp_dict['mbasis'] + '.qasm'
+    else:
+        exp_dict["filename"] = runname + '_' + datestr + '_' + device + '_' + exp_dict['pstate'] + '_' + exp_dict['mbasis'] + '.qasm'
     return exp_dict
 
 
@@ -67,10 +76,15 @@ def write_state_tomo_qasms(**kwargs):
     # header for 5 qubit
     f.write("OPENQASM 2.0;\ninclude\"qelib1.inc\";\nqreg q[%s];\ncreg c[%s];\n"%(numQubits,numQubits))
     # state preparation
-    prepGateStr = 'u2('+prep_params[exp_dict["pstate"]][0]+','+prep_params[exp_dict["pstate"]][1]+')'
-    for i in range(numQubits):
-        qubitStr = 'q[%d]'%(i)
-        f.write(prepGateStr + ' ' + qubitStr +';\n')
+    if prep_params[exp_dict["pstate"]] is not None:
+        gate = prep_params[exp_dict["pstate"]][0]
+        if gate == 'u2':
+            prepGateStr = 'u2('+prep_params[exp_dict["pstate"]][1]+','+prep_params[exp_dict["pstate"]][2]+')'
+        elif gate =='u3':
+            prepGateStr = 'u3(' + prep_params[exp_dict["pstate"]][1] + ',' + prep_params[exp_dict["pstate"]][2]+ ',' + prep_params[exp_dict["pstate"]][3] + ')'
+        for i in range(numQubits):
+            qubitStr = 'q[%d]'%(i)
+            f.write(prepGateStr + ' ' + qubitStr +';\n')
     for d in range(exp_dict["numIdGates"]):
         f.write(barrierStr)
         for i in range(numQubits):
@@ -88,7 +102,7 @@ def write_state_tomo_qasms(**kwargs):
         f.write('measure q[%d] -> c[%d];\n'%(i,i))
     f.close
 
-def write_measurement_error_mitigation_qasm(**kwargs):
+def write_measurement_error_mitigation_qasm(cal_state,cal_basis,**kwargs):
     if "exp_dict" in kwargs:
         exp_dict = kwargs.get("exp_dict")
     else:
@@ -97,14 +111,34 @@ def write_measurement_error_mitigation_qasm(**kwargs):
         os.makedirs(exp_dict["filepath"])
     numQubits = device_numQubit[exp_dict['device']]
     barrierStr = 'barrier %s;\n'%(write_qubit_index(numQubits))
-    f = open(exp_dict["filepath"] + exp_dict["filename"], "w")
+    filename = exp_dict['filename'].replace(exp_dict['runname'],'MeasError_Mitigate')
+    f = open(exp_dict["filepath"] + filename, "w")
     # header for 5 qubit
     f.write("OPENQASM 2.0;\ninclude\"qelib1.inc\";\nqreg q[%s];\ncreg c[%s];\n"%(numQubits,numQubits))
     # z basis state prep
-
+    # state preparation
+    if prep_params[cal_state] is not None:
+        gate = prep_params[cal_state][0]
+        if gate == 'u2':
+            prepGateStr = 'u2(' + prep_params[cal_state][1] + ',' + prep_params[cal_state][2] + ')'
+        elif gate == 'u3':
+            prepGateStr = 'u3(' + prep_params[cal_state][1] + ',' + prep_params[cal_state][2] + ',' + \
+                          prep_params[exp_dict["pstate"]][3] + ')'
+        for i in range(numQubits):
+            qubitStr = 'q[%d]' % (i)
+            f.write(prepGateStr + ' ' + qubitStr + ';\n')
     # measurement basis post rotation
-    # measure
-
+    if meas_params[cal_basis] is not None:
+        f.write(barrierStr)
+        measGateStr = 'u2('+meas_params[cal_basis][0]+','+meas_params[cal_basis][1]+')'
+        for i in range(numQubits):
+            qubitStr = 'q[%d]' %(i)
+            f.write(measGateStr + ' ' + qubitStr + ';\n')
+    # measurement
+    f.write(barrierStr)
+    for i in range(numQubits):
+        f.write('measure q[%d] -> c[%d];\n'%(i,i))
+    f.close
 
 
 def write_state_tomo_dd_qasms(**kwargs):
@@ -121,7 +155,11 @@ def write_state_tomo_dd_qasms(**kwargs):
     # header for 5 qubit
     f.write("OPENQASM 2.0;\ninclude\"qelib1.inc\";\nqreg q[%s];\ncreg c[%s];\n"%(numQubits,numQubits))
     # state preparation
-    prepGateStr = 'u2('+prep_params[exp_dict["pstate"]][0]+','+prep_params[exp_dict["pstate"]][1]+')'
+    gate = prep_params[exp_dict["pstate"]][0]
+    if gate == 'u2':
+        prepGateStr = 'u2('+prep_params[exp_dict["pstate"]][1]+','+prep_params[exp_dict["pstate"]][2]+')'
+    elif gate == 'u3':
+        prepGateStr = 'u3(' + prep_params[exp_dict["pstate"]][1] + ',' + prep_params[exp_dict["pstate"]][2] + ','+ prep_params[exp_dict["pstate"]][3] + ')'
     for i in range(numQubits):
         qubitStr = 'q[%d]'%(i)
         f.write(prepGateStr + ' ' + qubitStr +';\n')
@@ -151,6 +189,11 @@ measurement_basis = list(meas_params.keys())
 # folder /device/date/state_tomography_freeEvo/
 pstate = 'XplusState'
 
+# measurement mitigation circuits
+for p in ['ZplusState','ZminusState']:
+    dict0 = construct_exp_dict(runname=runname,device=device,pstate=p,mbasis='obsZ',circuitPath=circuitPath)
+    write_measurement_error_mitigation_qasm(p,'obsZ',exp_dict=dict0)
+
 # # dense sampling rate
 num_repetition = 48
 num_complete = 0 # completed circuits
@@ -161,7 +204,7 @@ for r in range(num_complete,num_repetition):
         dict0 = construct_exp_dict(runname=runname,device=device,pstate=pstate,mbasis=mbasis,circuitPath=circuitPath,numIdGates=numIdGates)
         write_state_tomo_qasms(exp_dict=dict0)
 
-# # sparse sampling rate
+# # # sparse sampling rate
 num_repetition = 61
 num_complete = 0 # completed circuits, starts with 0
 sampling_rate = 24
