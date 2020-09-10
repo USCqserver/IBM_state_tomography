@@ -198,7 +198,7 @@ for p in ['ZplusState','ZminusState']:
 num_repetition = 48
 num_complete = 0 # completed circuits
 sampling_rate = 12
-for r in range(num_complete,num_repetition):
+for r in range(num_complete,num_repetition+1):
     numIdGates = sampling_rate * r
     for mbasis in measurement_basis:
         dict0 = construct_exp_dict(runname=runname,device=device,pstate=pstate,mbasis=mbasis,circuitPath=circuitPath,numIdGates=numIdGates)

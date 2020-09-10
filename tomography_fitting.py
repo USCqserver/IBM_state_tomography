@@ -5,6 +5,7 @@ import csv
 import numpy as np
 import matplotlib.pyplot as plt
 from math import acos, atan
+from random import choices
 if method == 'rigetti':
     import qutip as qt
     from collections import namedtuple
@@ -154,6 +155,60 @@ def make_povm(confusion_rate_matrix=[[1, 0], [0, 1]]):
            for pjs in confusion_rate_matrix]
     return DiagonalPOVM(pi_basis=pi_basis, confusion_rate_matrix=confusion_rate_matrix, ops=ops)
 
+
+def Qobj2BlochVec(qobj):
+    vlist = [qobj * QX, qobj * QY, qobj * QZ]
+    vector = np.array([a.tr() for a in vlist])
+    return vector
+
+
+def rho2BlochVec(rho, polar=False):
+    vlist = [np.matmul(rho, s) for s in [SX, SY, SZ]]
+    vector = np.array([np.real(np.trace(a)) for a in vlist])  # Bloch vector has real values
+    if polar:
+        v = np.sqrt(np.sum(vector ** 2))
+        theta = acos(vector[2] / v)
+        phi = atan(vector[1] / vector[0]) if vector[0] != 0 else atan(np.inf)
+        return np.array([v, theta, phi])
+    else:
+        return vector
+
+
+def rigetti_tomography(histograms):
+    tomo_result = StateTomography.estimate_from_ssr(histograms, readout_povm, channel_ops,
+                                                    settings=DEFAULT_STATE_TOMO_SETTINGS)
+    return tomo_result
+
+
+def ibm_tomography(histograms):
+    basisStrListIN = ['X', 'Y', 'Z']
+    countsListIN = hist2dict(histograms, basisStrListIN)
+    rho = IBM_QST_from_counts(countsListIN, basisStrListIN)
+    return rho
+
+def resample_hist(hist):
+    """
+    hist is 3 by 2 array for single qubit
+    return a resampled hist
+    """
+    histgram_resampled = []
+    for i in range(hist.shape[0]): # number of configurations
+        population = [0] * hist[i,0] + [1] * hist[i,1]
+        population_resampled = choices(population,k = sum(hist[i]))
+        h_resampled = [population_resampled.count(0), population_resampled.count(1)]
+        histgram_resampled.append(h_resampled)
+    return np.array(histgram_resampled)
+
+def cal_qobjList_variance(rhomat, repre):
+    """
+    given a list of rho, calculate its variance in either computational basis or bloch representation
+    """
+    if repre == 'bloch':
+        if rhomat.shape[0] == 3:
+            rho_variance = np.array(
+                [np.var(rhomat[i, :]) for i in range(rhomat.shape[0])])
+    return rho_variance
+
 class StateTomographyFit:
     def __init__(self):
         self.idlist = None
@@ -178,7 +233,7 @@ class StateTomographyFit:
         self.runname = '_'.join([exp0.runname, exp0.datestr , exp0.device, exp0.pstate, exp0.runNo])
         self.runname += '_Q%s'%(str(qubiti[0])) # single qubit tomography
         # change the information below
-        datafiles_run = glob.glob(datapath+'*.txt')
+        datafiles_run = glob.glob(datapath+'stateTomo*.txt')
         if '_' in exp0.device:
             strid = 5
         else:
@@ -188,31 +243,6 @@ class StateTomographyFit:
         self.rhomat = []
         self.pmat = []
         self.bloch = []
-        def Qobj2BlochVec(qobj):
-            vlist = [qobj * QX,qobj * QY,qobj * QZ]
-            vector = np.array([a.tr() for a in vlist])
-            return vector
-        def rho2BlochVec(rho,polar=False):
-            vlist = [np.matmul(rho,s) for s in [SX,SY,SZ]]
-            vector = np.array([np.real(np.trace(a)) for a in vlist]) # Bloch vector has real values
-            if polar:
-                v = np.sqrt(np.sum(vector ** 2))
-                theta = acos(vector[2]/v)
-                phi = atan(vector[1]/vector[0]) if vector[0] != 0 else atan(np.inf)
-                return np.array([v,theta,phi])
-            else:
-                return vector
-
-        def rigetti_tomography(histograms):
-            tomo_result = StateTomography.estimate_from_ssr(histograms, readout_povm, channel_ops,
-                                                            settings=DEFAULT_STATE_TOMO_SETTINGS)
-            return tomo_result
-        def ibm_tomography(histograms):
-            basisStrListIN = ['X', 'Y', 'Z']
-            countsListIN = hist2dict(histograms,basisStrListIN)
-            rho = IBM_QST_from_counts(countsListIN, basisStrListIN)
-            return rho
-
         for i in range(len(idlist)):
             numIdGates = int(idlist[i])
             histograms = make_tomography_hist(exp0, numIdGates=numIdGates,qubiti=qubiti,shots=nsamples)
@@ -246,6 +276,23 @@ class StateTomographyFit:
             self.rhomat = np.array(self.rhomat).transpose()
         self.bloch = np.array(self.bloch).transpose()
         self.pmat = np.array(self.pmat).transpose()
+
+    def assign_errorbars_from_run(self,exp0,qubiti,repre='bloch',Nboots=1000):
+        setattr(self,'var',np.empty(self.bloch.shape,dtype=np.float))
+        for i in range(len(self.idlist)):
+            numIdGates = int(self.idlist[i])
+            histograms = make_tomography_hist(exp0, numIdGates=numIdGates,qubiti=qubiti,shots=nsamples)
+            if repre == 'bloch':
+                rhomat = np.empty((3,Nboots),dtype=np.float)
+            for r in range(int(Nboots)):
+                rhist = resample_hist(histograms)
+                if method == 'ibm':
+                    tomo_result = ibm_tomography(rhist)
+                    if repre=='bloch':
+                        rhomat[:,r] = rho2BlochVec(tomo_result,polar=False)
+            print('complete boostrapping at id = %s'%(str(numIdGates)))
+            self.var[:, i] = cal_qobjList_variance(rhomat, repre=repre)
+
 
     def Gate2Time(self,gatetime):
         return self.idlist * gatetime
@@ -334,8 +381,13 @@ class StateTomographyFit:
             plt.show()
         plt.close()
 
-    def saveBloch2csv(self,filepath,**kwargs):
-        data = zip(self.idlist,self.tlist,np.real(self.bloch[0,:]),np.real(self.bloch[1,:]),np.real(self.bloch[2,:]))
+    def saveBloch2csv(self,filepath,bootstrap=False,**kwargs):
+        if not bootstrap:
+            data = zip(self.idlist, self.tlist, np.real(self.bloch[0, :]), np.real(self.bloch[1, :]),
+                       np.real(self.bloch[2, :]))
+        else:
+            data = zip(self.idlist,self.tlist,np.real(self.bloch[0,:]),np.real(self.bloch[1,:]),np.real(self.bloch[2,:]),
+                       np.real(self.var[0,:]),np.real(self.var[1,:]),np.real(self.var[2,:]))
         filename = self.runname +'_%s'%(method) +'_blochVector'
         if 'polar' in kwargs:
             polar = kwargs.get('polar')
@@ -346,10 +398,14 @@ class StateTomographyFit:
             filename += '_polar'
         else:
             header = ['id', 'time', 'vx', 'vy', 'vz']
+        if bootstrap:
+            header += [ 'var_vx', 'var_vy', 'var_vz']
         with open(filepath + filename + '.csv', 'w', newline='') as file:
             writer = csv.writer(file, delimiter=',')
             writer.writerow(header)
             writer.writerows(data)
+        print('BlochVector csv save at %s+%s'%(filepath, filename))
+        return filename
 
     def saveRho2csv(self,filepath):
         data = zip(self.idlist,self.tlist,np.real(self.rhomat[0,:]),np.imag(self.rhomat[0,:]),np.real(self.rhomat[1,:]),np.imag(self.rhomat[1,:]),\
@@ -361,7 +417,7 @@ class StateTomographyFit:
             writer.writerow(header)
             writer.writerows(data)
 
-    def blochInPolarCoordinate(self, truncate,plot=True):
+    def blochInPolarCoordinate(self,plot=True,**kwargs):
         samples_polar = np.zeros(self.bloch.shape, dtype=float)
         for i in range(self.bloch.shape[1]):
             samples_polar[:, i] = blochInPolarCoordinate(self.bloch[:, i])
@@ -373,13 +429,25 @@ class StateTomographyFit:
                              markersize=3, markeredgewidth=0.3, markeredgecolor=mycolor['black'])
                 axes[i].set_xlabel(r'Time ($\mu$s)')
                 axes[i].legend(loc=1)
-                axes[i].set_xlim(0,truncate)
+                if 'truncate' in kwargs:
+                    truncate = kwargs.get('truncate')
+                    axes[i].set_xlim(0,truncate)
             plt.show()
             plt.close()
         return samples_polar
 
 
-
+def saveVar2csv(datapath,csvfile,varmat,Nboots=1000):
+    header = ['id', 'time', 'vx', 'vy', 'vz','var_vx', 'var_vy', 'var_vz']
+    allRows = np.genfromtxt(datapath + csvfile + '.csv', delimiter=',',skip_header=1)
+    if allRows.shape[0] == varmat.shape[1]:
+        new_data = np.concatenate((allRows,varmat.transpose()),axis=-1)
+    # write to new csv
+    new_csvfile = csvfile.split('.')[0] + '_appendVar_Nboots=%s.csv'%(str(Nboots))
+    with open(filepath + new_csvfile, 'w', newline='') as file:
+        writer = csv.writer(file, delimiter=',')
+        writer.writerow(header)
+        writer.writerows(new_data)
 
 num_qubits = len(qubits)
 dimension = 2 ** num_qubits
@@ -401,8 +469,8 @@ ckeys = list(mycolor.keys())
 # read date from
 datapath = r'/home/haimeng/LocalProjects/IBM-PMME/Data/raw/'
 # raw data info
-exp0 = ExpObject(runname='stateTomo_freeEvo', datestr='11062020', device='ibmq_armonk', pstate='XplusState',
-                 runNo='run1-partial')
+exp0 = ExpObject(runname='stateTomo_freeEvo', datestr='08092020', device='ibmq_armonk', pstate='XplusState',
+                 runNo='run10')
 datapath = r"/home/haimeng/LocalProjects/IBM-PMME/Data/raw/" + exp0.device + "/" + exp0.datestr + "/" + exp0.runname + "/" + exp0.runNo +"/"
 # store date to
 filepath = r"/home/haimeng/LocalProjects/IBM-PMME/Analysis/" + exp0.device + "/" + exp0.datestr + '/'
@@ -413,9 +481,12 @@ for i in range(1):
     # change where x-axis stops using keyword argument 'idMax';
     # change x-axis resolution using argument 'spacing', sampling frequency equals 1 sample per spacing*4 Id gates
     tomo_fit.plot_bloch_vector(save=True,filepath=filepath,spacing=1,polar=False)
-    tomo_fit.blochInPolarCoordinate(truncate=58)
+    csvfile = tomo_fit.saveBloch2csv(filepath,polar=False)
+    tomo_fit.assign_errorbars_from_run(exp0,qubiti=[i],Nboots=100)
+    saveVar2csv(filepath, csvfile, tomo_fit.var, Nboots=100)
+    # tomo_fit.blochInPolarCoordinate()
     #tomo_fit.plot_denisty_matrix(save=False,filepath=filepath,spacing=2)
-    # tomo_fit.saveBloch2csv(filepath,polar=True)
+    # tomo_fit.saveBloch2csv(filepath,polar=False)
     # tomo_fit.save2csv(filepath)
     # tomo_fit.saveRho2csv(filepath)
     # import pickle
