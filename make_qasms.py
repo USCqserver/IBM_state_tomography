@@ -18,7 +18,12 @@ meas_params = {"obsZ": None,
         "obsY": (str(0),str(round(pi/2,rdigit)))}
 
 device_numQubit = {'ibmqx2':5,
-                          'ibmq_armonk':1}
+                    'ibmq_armonk':1,
+                   'ibmq_athens':5,
+                   'ibmq_vigo': 5,
+                   'ibmq_ourense':5,
+                   'ibmq_valencia':5,
+                   'ibmq_santiago':5}
 
 ddGateStr = {'X': 'u3(3.141592653589793,0,3.141592653589793)',
            'Y': 'u3(3.141592653589793,1.5707963267948966,1.5707963267948966)'}
@@ -28,11 +33,11 @@ def construct_exp_dict(device,pstate,mbasis,circuitPath,**kwargs):
     make the experiment configuration dict for free evolution
     """
     today = date.today()
-    datestr = today.strftime("%d%m%Y")
+    datestr = today.strftime("%Y%m%d")
     if 'runname' in kwargs:
         runname = kwargs.get('runname')
     elif 'mainq' in kwargs and isinstance(pstate,dict):
-        runname = '_'.join(['Free','Q%d'%(int(kwargs.get('mainq'))),pstate['main'],'QS',pstate['spec']])
+        runname = '_'.join(['Meas%sFree'%(kwargs.get('measurement_config').capitalize() if 'measurement_config' in kwargs else ''),'Q%d'%(int(kwargs.get('mainq'))),pstate['main'],'QS',pstate['spec']])
     elif isinstance(pstate,str):
         runname = 'Free' + '_' + pstate
     exp_dict = {"runname": runname, "date": datestr, "device": device,
@@ -215,19 +220,21 @@ def write_state_prep(f,exp_dict):
         # get the gate type
         if i == mainq:
             gatename = exp_dict["pstate"]['main']
-            gate = prep_params[gatename][0]
         else:
             gatename = exp_dict["pstate"]['spec']
-        gate = prep_params[gatename][0]
-        if gate == 'u2':
-            prepGateStr = 'u2(' + prep_params[gatename][1] + ',' + prep_params[gatename][
-                2] + ')'
-        elif gate == 'u3':
-            prepGateStr = 'u3(' + prep_params[gatename][1] + ',' + prep_params[gatename][
-                2] + ',' + prep_params[gatename][3] + ')'
-        f.write(prepGateStr + ' ' + qubitStr + ';\n')
+        gate = prep_params[gatename][0] if gatename is not 'None' else None
+        if gate is not None:
+            if gate == 'u2':
+                prepGateStr = 'u2(' + prep_params[gatename][1] + ',' + prep_params[gatename][
+                    2] + ')'
+            elif gate == 'u3':
+                prepGateStr = 'u3(' + prep_params[gatename][1] + ',' + prep_params[gatename][
+                    2] + ',' + prep_params[gatename][3] + ')'
+            elif gate == 'id':
+                prepGateStr = 'id'
+            f.write(prepGateStr + ' ' + qubitStr + ';\n')
 
-def write_state_tomo_free_qasms(**kwargs):
+def write_state_tomo_free_qasms(measure_config='all',**kwargs):
     """
     advance version of free evolution with option to prepare spectator qubits with user-specified initial states
     exp_dict[pstate] is a dictionary contains initial states for main qubit and spectator qubits
@@ -257,14 +264,21 @@ def write_state_tomo_free_qasms(**kwargs):
         f.write(barrierStr)
         measGateStr = 'u2('+meas_params[exp_dict["mbasis"]][0]+','+meas_params[exp_dict["mbasis"]][1]+')'
         for i in range(numQubits):
-            qubitStr = 'q[%d]' %(i)
-            if i == mainq:
+            if measure_config == 'mainq':
+                if i == mainq:
+                    qubitStr = 'q[%d]' %(i)
+                    f.write(measGateStr + ' ' + qubitStr + ';\n')
+            else:
+                qubitStr = 'q[%d]' % (i)
                 f.write(measGateStr + ' ' + qubitStr + ';\n')
     # measurement
     f.write(barrierStr)
-    # for i in range(numQubits):
-    i = exp_dict['mainq']
-    f.write('measure q[%d] -> c[%d];\n'%(i,i))
+    if measure_config == 'mainq':
+        i = exp_dict['mainq']
+        f.write('measure q[%d] -> c[%d];\n'%(i,i))
+    else:
+        for i in range(numQubits):
+            f.write('measure q[%d] -> c[%d];\n' % (i, i))
     f.close
 
 def write_state_tomo_dd_on_spectator_qasms(**kwargs):
@@ -298,31 +312,33 @@ def write_state_tomo_dd_on_spectator_qasms(**kwargs):
         measGateStr = 'u2('+meas_params[exp_dict["mbasis"]][0]+','+meas_params[exp_dict["mbasis"]][1]+')'
         for i in range(numQubits):
             qubitStr = 'q[%d]' %(i)
-            if i == mainq:
-                f.write(measGateStr + ' ' + qubitStr + ';\n')
+            # if i == mainq:
+            f.write(measGateStr + ' ' + qubitStr + ';\n')
     # measurement
     f.write(barrierStr)
-    # for i in range(numQubits):
-    i = exp_dict['mainq']
-    f.write('measure q[%d] -> c[%d];\n'%(i,i))
+    for i in range(numQubits):
+    # i = exp_dict['mainq']
+        f.write('measure q[%d] -> c[%d];\n'%(i,i))
     f.close
 
 circuitPath = r"../Circuits/"
-device = "ibmqx2"
-
-runname = 'stateTomo_freeEvo'
+device = "ibmq_ourense"
+measurement_config = 'mainq'
+runname = 'MeasMainStateTomo_freeEvo'
 measurement_basis = list(meas_params.keys())
 # folder /device/date/state_tomography_freeEvo/
 # pstates = ['XminusState', 'YminusState','YplusState']
-pstates = ['XplusState']
+#pstates = ['XplusState']
 def write_free_and_dd():
     for pstate in pstates:
-        runname = 'stateTomo_freeEvo'
+        runname = 'MeasAllstateTomo_freeEvo'
         runname = runname + '_' + pstate
         # measurement mitigation circuits
+        """
         for p in ['ZplusState','ZminusState']:
             dict0 = construct_exp_dict(runname=runname,device=device,pstate=p,mbasis='obsZ',circuitPath=circuitPath)
             write_measurement_error_mitigation_qasm(p,'obsZ',exp_dict=dict0)
+        """
         # # dense sampling rate
         num_repetition = 24
         num_complete = 0 # completed circuits
@@ -345,10 +361,10 @@ def write_free_and_dd():
     #         write_state_tomo_qasms(exp_dict=dict0)
 
         # DD circtuis
-        runname = 'stateTomo_DD' + '_' + pstate
-        for p in ['ZplusState','ZminusState']:
-            dict0 = construct_exp_dict(runname=runname,device=device,pstate=p,mbasis='obsZ',circuitPath=circuitPath)
-            write_measurement_error_mitigation_qasm(p,'obsZ',exp_dict=dict0)
+        runname = 'MeasAllstateTomo_DD' + '_' + pstate
+        # for p in ['ZplusState','ZminusState']:
+        #     dict0 = construct_exp_dict(runname=runname,device=device,pstate=p,mbasis='obsZ',circuitPath=circuitPath)
+        #     write_measurement_error_mitigation_qasm(p,'obsZ',exp_dict=dict0)
         for r in range(num_complete,num_repetition):
             numDDgates = sampling_rate * r
             for mbasis in measurement_basis:
@@ -359,33 +375,34 @@ def write_free_and_dd_w_spectators(qindex,pstate):
         # # dense sampling rate
         num_repetition = 24
         num_complete = 0  # completed circuits
-        sampling_rate = 24
+        sampling_rate = 24 # 48-72 for athens, 24 for ibmqx2, armonk
         for r in range(num_complete, num_repetition):
             numIdGates = sampling_rate * r
             for mbasis in measurement_basis:
                 dict0 = construct_exp_dict(mainq=qindex, device=device, pstate=pstate, mbasis=mbasis,
-                                           circuitPath=circuitPath, numIdGates=numIdGates)
-                write_state_tomo_free_qasms(exp_dict=dict0)
+                                           circuitPath=circuitPath, numIdGates=numIdGates,measurement_config=measurement_config)
+                write_state_tomo_free_qasms(measure_config=measurement_config,exp_dict=dict0)
         # measurement mitigation circuits
         for p in ['ZplusState', 'ZminusState']:
             dict0 = construct_exp_dict(mainq=qindex,runname=dict0['runname'], device=device, pstate=p, mbasis='obsZ',
                                        circuitPath=circuitPath)
             write_measurement_error_mitigation_qasm(p, 'obsZ', exp_dict=dict0)
         # DD circtuis
-        for r in range(num_complete, num_repetition):
-            numDDgates = sampling_rate * r
-            for mbasis in measurement_basis:
-                dict0 = construct_dd_exp_dict(mainq=qindex,device=device, pstate=pstate, mbasis=mbasis,
-                                              circuitPath=circuitPath, numDDrep=numDDgates)
-                write_state_tomo_dd_on_spectator_qasms(exp_dict=dict0)
-        for p in ['ZplusState', 'ZminusState']:
-            dict0 = construct_exp_dict(mainq=qindex,runname=dict0['runname'], device=device, pstate=p, mbasis='obsZ',
-                                       circuitPath=circuitPath)
-            write_measurement_error_mitigation_qasm(p, 'obsZ', exp_dict=dict0)
-for p in prep_params.keys():
-    pstates = {'main': 'XplusState',
-               'spec': p}
-    write_free_and_dd_w_spectators(qindex=0,pstate=pstates)
+        # for r in range(num_complete, num_repetition):
+        #     numDDgates = sampling_rate * r
+        #     for mbasis in measurement_basis:
+        #         dict0 = construct_dd_exp_dict(mainq=qindex,device=device, pstate=pstate, mbasis=mbasis,
+        #                                       circuitPath=circuitPath, numDDrep=numDDgates)
+        #         write_state_tomo_dd_on_spectator_qasms(exp_dict=dict0)
+        # for p in ['ZplusState', 'ZminusState']:
+        #     dict0 = construct_exp_dict(mainq=qindex,runname=dict0['runname'], device=device, pstate=p, mbasis='obsZ',
+        #                                circuitPath=circuitPath)
+        #     write_measurement_error_mitigation_qasm(p, 'obsZ', exp_dict=dict0)
+pkeys5 = ['XplusState', 'XminusState', 'YplusState', 'YminusState',  'ZminusState']
+for p in pkeys5:
+    pstates = {'main': p,
+               'spec': 'ZminusState'}
+    write_free_and_dd_w_spectators(qindex=1,pstate=pstates)
 # check a random qasm
 # qasm_name = dict0["filepath"] + dict0["filename"]
 # qasm_obj = qasm.Qasm(qasm_name)

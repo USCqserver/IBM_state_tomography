@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from math import acos, atan
 from random import choices
+from pathlib import Path
 if method == 'rigetti':
     import qutip as qt
     from collections import namedtuple
@@ -27,6 +28,11 @@ nsamples = 8192
 # an example datafile
 datafile = r"stateTomo_freeEvo_11062020_ibmq_armonk_numIdGates=0_XplusState_obsX_5ee267acc926d60014453300.txt"
 idGateTime = {'ibmqx2': 3.555555555555556e-02, # in us
+              'ibmq_athens': 3.555555555555556e-02,
+              'ibmq_ourense': 3.555555555555556e-02,
+              'ibmq_vigo': 3.555555555555556e-02,
+              'ibmq_valencia': 3.555555555555556e-02,
+              'ibmq_santiago':  3.555555555555556e-02,
               'ibmq_armonk': 1.4222222222222224e-01}
 
 def make_one_hist(datapath,qubiti,shots):
@@ -52,10 +58,12 @@ def count_outcome(raw_data, qubiti,shots):
     :return: data[bitlist_to_int] = counts
     """
     data = [0, 0]
+    num_qubits = len(raw_data[0][0])
     for line in raw_data:
-        if line[0][qubiti[0]] == '0':
+        # the classical bits are in reverse order
+        if line[0][num_qubits - 1 -qubiti[0]] == '0':
             data[0] += line[1]
-        elif line[0][qubiti[0]] == '1':
+        elif line[0][num_qubits - 1 - qubiti[0]] == '1':
             data[1] += line[1]
         else:
             raise ValueError("bit string value not identified")
@@ -66,8 +74,11 @@ def count_outcome(raw_data, qubiti,shots):
 
 
 def locate_datafile(expobj,obs,numIdGates):
+    # dataname = expobj.runname + '_' + expobj.datestr + '_' + expobj.device + '_' + 'numIdGates=' + str(
+    #     numIdGates) + '_' + expobj.pstate + '_' + obs
+    # renaming since 23112020
     dataname = expobj.runname + '_' + expobj.datestr + '_' + expobj.device + '_' + 'numIdGates=' + str(
-        numIdGates) + '_' + expobj.pstate + '_' + obs
+        numIdGates) + '_' + obs
     data_fullpath = '/home/haimeng/LocalProjects/IBM-PMME/Data/raw/' + expobj.device + '/' + expobj.datestr + '/' + expobj.runname + '/' + expobj.runNo + '/' + dataname + '*.txt'
     datafile = glob.glob(data_fullpath)
     if len(datafile)>=1:
@@ -220,7 +231,7 @@ class StateTomographyFit:
         self.config = None
         self.qindex = None
 
-    def fit_state_from_run(self,datapath,exp0,qubiti,polar=False):
+    def fit_state_from_run(self,datapath,exp0,qubiti,polar=False,**kwargs):
         """
         fit qubit time evlotion tomography from raw data
         :param datapath: raw data path, str
@@ -233,9 +244,14 @@ class StateTomographyFit:
         self.runname = '_'.join([exp0.runname, exp0.datestr , exp0.device, exp0.pstate, exp0.runNo])
         self.runname += '_Q%s'%(str(qubiti[0])) # single qubit tomography
         # change the information below
-        datafiles_run = glob.glob(datapath+'stateTomo*.txt')
-        if '_' in exp0.device:
-            strid = 5
+        datafiles_run = glob.glob(datapath+ '*numIdGates*.txt')
+        if 'strid' in kwargs:
+            strid = kwargs.get('strid')
+        elif '_' in exp0.device:
+            if 'State' in exp0.runname:
+                strid = 6
+            else:
+                strid = 5
         else:
             strid = 4
         idlist = sorted(list(set([int(f.split('/')[-1].split('_')[strid].split('=')[1]) for f in datafiles_run])))
@@ -332,7 +348,7 @@ class StateTomographyFit:
             if 'filepath' in kwargs:
                 filepath = kwargs.get('filepath')
             if not os.path.exists(filepath):
-                os.mkdir(filepath)
+                Path(filepath).mkdir(parents=True)
             filename = self.runname + '_%s'%(method) + '_blochVector'
             if polar:
                 filename += '_polar'
@@ -400,6 +416,8 @@ class StateTomographyFit:
             header = ['id', 'time', 'vx', 'vy', 'vz']
         if bootstrap:
             header += [ 'var_vx', 'var_vy', 'var_vz']
+        if not os.path.exists(filepath):
+            os.makedirs(filepath)
         with open(filepath + filename + '.csv', 'w', newline='') as file:
             writer = csv.writer(file, delimiter=',')
             writer.writerow(header)
@@ -417,7 +435,7 @@ class StateTomographyFit:
             writer.writerow(header)
             writer.writerows(data)
 
-    def blochInPolarCoordinate(self,plot=True,**kwargs):
+    def blochInPolarCoordinate(self,plot=True,save=False,**kwargs):
         samples_polar = np.zeros(self.bloch.shape, dtype=float)
         for i in range(self.bloch.shape[1]):
             samples_polar[:, i] = blochInPolarCoordinate(self.bloch[:, i])
@@ -432,7 +450,17 @@ class StateTomographyFit:
                 if 'truncate' in kwargs:
                     truncate = kwargs.get('truncate')
                     axes[i].set_xlim(0,truncate)
-            plt.show()
+            if save:
+                if 'filepath' in kwargs:
+                    filepath = kwargs.get('filepath')
+                if not os.path.exists(filepath):
+                    os.mkdir(filepath)
+                filename = self.runname
+                plt.savefig(filepath + filename + '_polarCordi.png')
+                # pickle.dump(filepath, open(filepath + filename + '.pickle', "wb"))
+                plt.show()
+            else:
+                plt.show()
             plt.close()
         return samples_polar
 
@@ -469,27 +497,31 @@ ckeys = list(mycolor.keys())
 # read date from
 datapath = r'/home/haimeng/LocalProjects/IBM-PMME/Data/raw/'
 # raw data info
-exp0 = ExpObject(runname='stateTomo_freeEvo', datestr='08092020', device='ibmq_armonk', pstate='XplusState',
-                 runNo='run10')
-datapath = r"/home/haimeng/LocalProjects/IBM-PMME/Data/raw/" + exp0.device + "/" + exp0.datestr + "/" + exp0.runname + "/" + exp0.runNo +"/"
-# store date to
-filepath = r"/home/haimeng/LocalProjects/IBM-PMME/Analysis/" + exp0.device + "/" + exp0.datestr + '/'
-tomo_fit = StateTomographyFit()
-for i in range(1):
-    tomo_fit.fit_state_from_run(datapath,exp0,qubiti=[i],polar=False)
-
-    # change where x-axis stops using keyword argument 'idMax';
-    # change x-axis resolution using argument 'spacing', sampling frequency equals 1 sample per spacing*4 Id gates
-    tomo_fit.plot_bloch_vector(save=True,filepath=filepath,spacing=1,polar=False)
-    csvfile = tomo_fit.saveBloch2csv(filepath,polar=False)
-    tomo_fit.assign_errorbars_from_run(exp0,qubiti=[i],Nboots=100)
-    saveVar2csv(filepath, csvfile, tomo_fit.var, Nboots=100)
-    # tomo_fit.blochInPolarCoordinate()
-    #tomo_fit.plot_denisty_matrix(save=False,filepath=filepath,spacing=2)
-    # tomo_fit.saveBloch2csv(filepath,polar=False)
-    # tomo_fit.save2csv(filepath)
-    # tomo_fit.saveRho2csv(filepath)
-    # import pickle
-    # filepath = r"/home/haimeng/LocalProjects/IBM-PMME/Analysis/"
-    # filename = exp0.runname + '_' + exp0.datestr +'_'+exp0.device +'_'+exp0.pstate +'_run1.pickle'
-    # pickle.dump(data, open( filepath+filename, "wb" ))
+for p in ['x','y']:
+    for eigen in ['plus','minus']:
+        i = 1 #which qubit
+        pstate = '%s'%(p).capitalize()+'%sState'%(eigen)
+        exp0 = ExpObject(runname='MeasMainqFree_Q%d_%s_QS_ZminusState'%(i,pstate), datestr='20201210', device='ibmq_ourense', pstate=pstate,
+                         runNo='run1')
+        datapath = r"/home/haimeng/LocalProjects/IBM-PMME/Data/raw/" + exp0.device + "/" + exp0.datestr + "/" + exp0.runname + "/" + exp0.runNo +"/"
+        # store data to
+        filepath = r"/home/haimeng/LocalProjects/IBM-PMME/Analysis/" + exp0.device + "/" + exp0.datestr + '/'
+        tomo_fit = StateTomographyFit()
+        save = True
+        Nboots = 10
+        tomo_fit.fit_state_from_run(datapath,exp0,qubiti=[i],polar=False,strid=8)
+        # change where x-axis stops using keyword argument 'idMax';
+        # change x-axis resolution using argument 'spacing', sampling frequency equals 1 sample per spacing*4 Id gates
+        tomo_fit.plot_bloch_vector(save=save,filepath=filepath,spacing=1,polar=False)
+        csvfile = tomo_fit.saveBloch2csv(filepath,polar=False)
+        tomo_fit.assign_errorbars_from_run(exp0,qubiti=[i],Nboots=Nboots)
+        saveVar2csv(filepath, csvfile, tomo_fit.var, Nboots=Nboots)
+        tomo_fit.blochInPolarCoordinate(save=save,filepath=filepath)
+        #tomo_fit.plot_denisty_matrix(save=False,filepath=filepath,spacing=2)
+        # tomo_fit.saveBloch2csv(filepath,polar=False)
+        # tomo_fit.save2csv(filepath)
+        # tomo_fit.saveRho2csv(filepath)
+        # import pickle
+        # filepath = r"/home/haimeng/LocalProjects/IBM-PMME/Analysis/"
+        # filename = exp0.runname + '_' + exp0.datestr +'_'+exp0.device +'_'+exp0.pstate +'_run1.pickle'
+        # pickle.dump(data, open( filepath+filename, "wb" ))
