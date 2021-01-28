@@ -2,16 +2,12 @@ from datetime import date
 import numpy as np
 from qiskit.circuit import library
 from qiskit.qasm import qasm
+from qiskit.quantum_info import operators
+from qiskit.extensions import unitary
 from math import pi
 import os
 
 rdigit = 5
-prep_params = {"XplusState": ('u2',str(0),str(round(pi,rdigit))),
-               'XminusState':('u2',str(round(pi,rdigit)),str(0)),
-               'YplusState':('u2',str(round(pi/2,rdigit)),str(round(pi/2,rdigit))),
-               'YminusState':('u2',str(round(-pi/2,rdigit)),str(round(-pi/2,rdigit))),
-               'ZplusState':('id',''),
-               'ZminusState':('u3',str(round(pi,rdigit)),str(-round(pi/2,rdigit)),str(round(pi/2,rdigit)))}
 # measurement gates are all u2 gate
 meas_params = {"obsZ": None,
         "obsX": (str(0),str(round(pi,rdigit))),
@@ -27,6 +23,27 @@ device_numQubit = {'ibmqx2':5,
 
 ddGateStr = {'X': 'u3(3.141592653589793,0,3.141592653589793)',
            'Y': 'u3(3.141592653589793,1.5707963267948966,1.5707963267948966)'}
+
+def random_u3_gate():
+    mat = operators.random.random_unitary(2)
+    randu = unitary.UnitaryGate(mat)
+    qstr = randu.qasm()
+    theta, phi, lamb = [round(float(n),rdigit) for n in qstr.split(' ')[-2].split('(')[1].split(')')[0].split(',')]
+    #TODO: a test function to make sure u_in and u_out are the same, can we use diamond norm?
+    mat_out = library.U3Gate(theta,phi,lamb)
+    phases = [mat.data.flatten()[i]/mat_out.to_matrix().flatten()[i] for i in range(4)]
+    equal = all(abs(phases[0] - ele) < 0.1**rdigit for ele in phases)
+    if equal:
+        return ('u3',str(theta),str(phi),str(lamb))
+    else:
+        raise ValueError('U3 gate parameters does not match the input random unitary!')
+
+prep_params = {"XplusState": ('u2',str(0),str(round(pi,rdigit))),
+               'XminusState':('u2',str(round(pi,rdigit)),str(0)),
+               'YplusState':('u2',str(round(pi/2,rdigit)),str(round(pi/2,rdigit))),
+               'YminusState':('u2',str(round(-pi/2,rdigit)),str(round(-pi/2,rdigit))),
+               'ZplusState':('id',''),
+               'ZminusState':('u3',str(round(pi,rdigit)),str(-round(pi/2,rdigit)),str(round(pi/2,rdigit)))}
 
 def construct_exp_dict(device,pstate,mbasis,circuitPath,**kwargs):
     """
@@ -208,7 +225,7 @@ def write_state_tomo_dd_qasms(**kwargs):
     for i in range(numQubits):
         f.write('measure q[%d] -> c[%d];\n'%(i,i))
     f.close
-def write_state_prep(f,exp_dict):
+def write_state_prep(f,exp_dict,**kwargs):
     """
     pstate is a string or a dictionary of strings
     """
@@ -222,17 +239,21 @@ def write_state_prep(f,exp_dict):
             gatename = exp_dict["pstate"]['main']
         else:
             gatename = exp_dict["pstate"]['spec']
-        gate = prep_params[gatename][0] if gatename is not 'None' else None
-        if gate is not None:
-            if gate == 'u2':
-                prepGateStr = 'u2(' + prep_params[gatename][1] + ',' + prep_params[gatename][
-                    2] + ')'
-            elif gate == 'u3':
-                prepGateStr = 'u3(' + prep_params[gatename][1] + ',' + prep_params[gatename][
-                    2] + ',' + prep_params[gatename][3] + ')'
-            elif gate == 'id':
-                prepGateStr = 'id'
-            f.write(prepGateStr + ' ' + qubitStr + ';\n')
+        if gatename[0] == 'randomState'[0]:
+            rprep_params = kwargs.get('rprep_params')
+            prepGateStr = 'u3(' + rprep_params[1] + ',' + rprep_params[2] + ',' + rprep_params[3] + ')'
+        else:
+            gate = prep_params[gatename][0] if gatename is not 'None' else None
+            if gate is not None:
+                if gate == 'u2':
+                    prepGateStr = 'u2(' + prep_params[gatename][1] + ',' + prep_params[gatename][
+                        2] + ')'
+                elif gate == 'u3':
+                    prepGateStr = 'u3(' + prep_params[gatename][1] + ',' + prep_params[gatename][
+                        2] + ',' + prep_params[gatename][3] + ')'
+                elif gate == 'id':
+                    prepGateStr = 'id'
+        f.write(prepGateStr + ' ' + qubitStr + ';\n')
 
 def write_state_tomo_free_qasms(measure_config='all',**kwargs):
     """
@@ -253,7 +274,11 @@ def write_state_tomo_free_qasms(measure_config='all',**kwargs):
     # header for 5 qubit
     f.write("OPENQASM 2.0;\ninclude\"qelib1.inc\";\nqreg q[%s];\ncreg c[%s];\n"%(numQubits,numQubits))
     # state preparation
-    write_state_prep(f,exp_dict)
+    if exp_dict['pstate']['main'][0] == 'randomState'[0]:
+        rprep_params = kwargs.get('rprep_params')
+        write_state_prep(f, exp_dict,rprep_params=rprep_params)
+    else:
+        write_state_prep(f,exp_dict)
     # free evolution
     for d in range(exp_dict["numIdGates"]):
         f.write(barrierStr)
@@ -322,7 +347,7 @@ def write_state_tomo_dd_on_spectator_qasms(**kwargs):
     f.close
 
 circuitPath = r"../Circuits/"
-device = "ibmq_ourense"
+device = "ibmq_athens"
 measurement_config = 'mainq'
 runname = 'MeasMainStateTomo_freeEvo'
 measurement_basis = list(meas_params.keys())
@@ -375,13 +400,14 @@ def write_free_and_dd_w_spectators(qindex,pstate):
         # # dense sampling rate
         num_repetition = 24
         num_complete = 0  # completed circuits
-        sampling_rate = 24 # 48-72 for athens, 24 for ibmqx2, armonk
+        sampling_rate = 36 # 48-72 for athens, 24 for ibmqx2, armonk, vigo, 36 for valencia,
+        rprep_params = random_u3_gate() if pstate['main'][0] == 'randomState'[0] else None
         for r in range(num_complete, num_repetition):
             numIdGates = sampling_rate * r
             for mbasis in measurement_basis:
                 dict0 = construct_exp_dict(mainq=qindex, device=device, pstate=pstate, mbasis=mbasis,
                                            circuitPath=circuitPath, numIdGates=numIdGates,measurement_config=measurement_config)
-                write_state_tomo_free_qasms(measure_config=measurement_config,exp_dict=dict0)
+                write_state_tomo_free_qasms(measure_config=measurement_config,exp_dict=dict0,rprep_params=rprep_params)
         # measurement mitigation circuits
         for p in ['ZplusState', 'ZminusState']:
             dict0 = construct_exp_dict(mainq=qindex,runname=dict0['runname'], device=device, pstate=p, mbasis='obsZ',
@@ -399,11 +425,17 @@ def write_free_and_dd_w_spectators(qindex,pstate):
         #                                circuitPath=circuitPath)
         #     write_measurement_error_mitigation_qasm(p, 'obsZ', exp_dict=dict0)
 pkeys5 = ['XplusState', 'XminusState', 'YplusState', 'YminusState',  'ZminusState']
+pkeyr = 'randomState'
 for p in pkeys5:
     pstates = {'main': p,
-               'spec': 'ZminusState'}
-    write_free_and_dd_w_spectators(qindex=1,pstate=pstates)
-# check a random qasm
+               'spec': 'ZplusState'}
+    write_free_and_dd_w_spectators(qindex=3,pstate=pstates)
+for i in range(5):
+    pstates = {'main': pkeyr + str(i),
+               'spec': 'ZplusState'}
+    write_free_and_dd_w_spectators(qindex=3,pstate=pstates)
+
+# check if a random qasm is valid
 # qasm_name = dict0["filepath"] + dict0["filename"]
 # qasm_obj = qasm.Qasm(qasm_name)
 # qasm_obj.parse()

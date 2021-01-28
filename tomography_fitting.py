@@ -1,4 +1,4 @@
-method = 'ibm'
+method = 'rigetti'
 import os
 import pickle
 import csv
@@ -14,6 +14,7 @@ if method == 'rigetti':
     from tomography.state_tomography import *
     from tomography.tomography import TomographySettings, DEFAULT_SOLVER_KWARGS
     from tomography.operator_utils import OperatorBasis
+    from utility import blochInPolarCoordinate
 
 
 elif method == 'ibm':
@@ -73,11 +74,14 @@ def count_outcome(raw_data, qubiti,shots):
 
 
 
-def locate_datafile(expobj,obs,numIdGates):
+def locate_datafile(expobj,obs,numIdGates,**kwargs):
     # dataname = expobj.runname + '_' + expobj.datestr + '_' + expobj.device + '_' + 'numIdGates=' + str(
     #     numIdGates) + '_' + expobj.pstate + '_' + obs
     # renaming since 23112020
-    dataname = expobj.runname + '_' + expobj.datestr + '_' + expobj.device + '_' + 'numIdGates=' + str(
+    if numIdGates is None:
+        dataname = 'MeasError_Mitigate' + '_' + expobj.datestr + '_' + expobj.device + '_' + kwargs.get('pstate') + '_' + obs
+    else:
+        dataname = expobj.runname + '_' + expobj.datestr + '_' + expobj.device + '_' + 'numIdGates=' + str(
         numIdGates) + '_' + obs
     data_fullpath = '/home/haimeng/LocalProjects/IBM-PMME/Data/raw/' + expobj.device + '/' + expobj.datestr + '/' + expobj.runname + '/' + expobj.runNo + '/' + dataname + '*.txt'
     datafile = glob.glob(data_fullpath)
@@ -131,6 +135,15 @@ def U2Gate(angles):
 def to_density_matrix(state):
     return state * state.dag()
 
+
+def make_confusion_matrix(expobj,qubiti,shots):
+    assignment_probs = []
+    for p in ['ZplusState','ZminusState']:
+        file = locate_datafile(expobj,obs='obsZ',numIdGates=None,pstate=p)
+        assignment_probs.append(make_one_hist(file,qubiti,shots))
+    assignment_probs = np.array(assignment_probs)/shots
+    return assignment_probs.transpose()
+
 if method == 'rigetti':
     UNIT_TRACE = 'unit_trace'
     DEFAULT_STATE_TOMO_SETTINGS = TomographySettings(
@@ -153,9 +166,6 @@ if method == 'rigetti':
          ("Y", QY / np.sqrt(2)), ("Z", QZ / np.sqrt(2))])
 
     channel_ops = TOMOGRAPHY_GATES
-    assignment_probs = np.array([[1, 0], [0, 1]])
-    num_qubits = 1
-    readout_povm = o_ut.make_diagonal_povm(o_ut.POVM_PI_BASIS ** num_qubits, assignment_probs)
 
 def make_povm(confusion_rate_matrix=[[1, 0], [0, 1]]):
     confusion_rate_matrix = np.asarray(confusion_rate_matrix)
@@ -185,7 +195,7 @@ def rho2BlochVec(rho, polar=False):
         return vector
 
 
-def rigetti_tomography(histograms):
+def rigetti_tomography(histograms,readout_povm):
     tomo_result = StateTomography.estimate_from_ssr(histograms, readout_povm, channel_ops,
                                                     settings=DEFAULT_STATE_TOMO_SETTINGS)
     return tomo_result
@@ -197,18 +207,34 @@ def ibm_tomography(histograms):
     rho = IBM_QST_from_counts(countsListIN, basisStrListIN)
     return rho
 
-def resample_hist(hist):
+def resample_hist(hist,bootstrap_method='classical'):
     """
+    classical bootstrap
     hist is 3 by 2 array for single qubit
     return a resampled hist
     """
     histgram_resampled = []
     for i in range(hist.shape[0]): # number of configurations
-        population = [0] * hist[i,0] + [1] * hist[i,1]
-        population_resampled = choices(population,k = sum(hist[i]))
-        h_resampled = [population_resampled.count(0), population_resampled.count(1)]
+        if bootstrap_method == 'classical':
+            population = [0] * hist[i,0] + [1] * hist[i,1]
+            population_resampled = choices(population,k = sum(hist[i]))
+            h_resampled = [population_resampled.count(0), population_resampled.count(1)]
+        elif bootstrap_method == 'bayesian':
+            h_resampled = safe_beta_histgram(hist[i,0],hist[i,1])
         histgram_resampled.append(h_resampled)
     return np.array(histgram_resampled)
+
+def safe_beta_histgram(a,b):
+    # adapted from Nic's code
+    # a == ground state, b == excited state
+    if a==0:
+        return [0,1]
+    if b==0:
+        return [1,0]
+    if a!=0 and b!=0:
+        pground = np.random.beta(a,b)
+        return [pground, 1-pground]
+
 
 def cal_qobjList_variance(rhomat, repre):
     """
@@ -231,7 +257,7 @@ class StateTomographyFit:
         self.config = None
         self.qindex = None
 
-    def fit_state_from_run(self,datapath,exp0,qubiti,polar=False,**kwargs):
+    def fit_state_from_run(self,datapath,exp0,qubiti,polar=False,readout_error_mitigation=False,**kwargs):
         """
         fit qubit time evlotion tomography from raw data
         :param datapath: raw data path, str
@@ -259,6 +285,13 @@ class StateTomographyFit:
         self.rhomat = []
         self.pmat = []
         self.bloch = []
+        if readout_error_mitigation:
+            assignment_probs = make_confusion_matrix(exp0, qubiti=self.qindex, shots=nsamples)
+        else:
+            assignment_probs = np.array([[1, 0], [0, 1]])
+        num_qubits = 1
+        readout_povm = o_ut.make_diagonal_povm(o_ut.POVM_PI_BASIS ** num_qubits, assignment_probs)
+
         for i in range(len(idlist)):
             numIdGates = int(idlist[i])
             histograms = make_tomography_hist(exp0, numIdGates=numIdGates,qubiti=qubiti,shots=nsamples)
@@ -266,7 +299,7 @@ class StateTomographyFit:
                 self.idlist.append(numIdGates)
                 self.pmat.append(histograms.flatten()/nsamples)
                 if method == 'rigetti':
-                    tomo_result = rigetti_tomography(histograms)
+                    tomo_result = rigetti_tomography(histograms,readout_povm)
                     self.rhomat.append(qt.operator_to_vector(tomo_result.rho_est).data)
                     self.bloch.append(Qobj2BlochVec(tomo_result.rho_est))
                 elif method == 'ibm':
@@ -293,19 +326,31 @@ class StateTomographyFit:
         self.bloch = np.array(self.bloch).transpose()
         self.pmat = np.array(self.pmat).transpose()
 
-    def assign_errorbars_from_run(self,exp0,qubiti,repre='bloch',Nboots=1000):
+    def assign_errorbars_from_run(self,exp0,qubiti,repre='bloch',Nboots=1000,readout_error_mitigation=False,bootstrap_method='bayesian'):
         setattr(self,'var',np.empty(self.bloch.shape,dtype=np.float))
+        if readout_error_mitigation:
+            assignment_probs = make_confusion_matrix(exp0, qubiti=self.qindex, shots=nsamples)
+        else:
+            assignment_probs = np.array([[1, 0], [0, 1]])
+        num_qubits = 1
+        readout_povm = o_ut.make_diagonal_povm(o_ut.POVM_PI_BASIS ** num_qubits, assignment_probs)
+
         for i in range(len(self.idlist)):
             numIdGates = int(self.idlist[i])
             histograms = make_tomography_hist(exp0, numIdGates=numIdGates,qubiti=qubiti,shots=nsamples)
+            # initialize empty array
             if repre == 'bloch':
                 rhomat = np.empty((3,Nboots),dtype=np.float)
             for r in range(int(Nboots)):
-                rhist = resample_hist(histograms)
+                rhist = resample_hist(histograms,bootstrap_method)
                 if method == 'ibm':
                     tomo_result = ibm_tomography(rhist)
                     if repre=='bloch':
                         rhomat[:,r] = rho2BlochVec(tomo_result,polar=False)
+                else:
+                    tomo_result = rigetti_tomography(rhist,readout_povm)
+                    if repre=='bloch':
+                        rhomat[:,r] = Qobj2BlochVec(tomo_result.rho_est)
             print('complete boostrapping at id = %s'%(str(numIdGates)))
             self.var[:, i] = cal_qobjList_variance(rhomat, repre=repre)
 
@@ -313,7 +358,7 @@ class StateTomographyFit:
     def Gate2Time(self,gatetime):
         return self.idlist * gatetime
 
-    def plot_bloch_vector(self,save=False,spacing=1,**kwargs):
+    def plot_bloch_vector(self,save=False,readout_error_mitigation=False,spacing=1,**kwargs):
         self.tlist = self.Gate2Time(gatetime=idGateTime[exp0.device])
         fig, ax = plt.subplots(ncols=1, nrows=1)
         fig.set_size_inches(7, 5)
@@ -324,7 +369,11 @@ class StateTomographyFit:
         else:
             labels = [r'$v_{x}$',r'$v_{y}$',r'$v_{z}$']
         for i in range(self.bloch.shape[0]):
-            ax.plot(self.idlist[0::spacing], self.bloch[i,0::spacing],'-s',label=labels[i],color=mycolor[ckeys[i]],markersize=3,markeredgewidth=0.3, markeredgecolor=mycolor['black'])
+            if hasattr(self,'var'):
+                ax.errorbar(self.idlist[0::spacing], self.bloch[i, 0::spacing], yerr=2*np.sqrt(self.var[i,0::spacing]),fmt='-o', label=labels[i],
+                        color=mycolor[ckeys[i]], markersize=3, markeredgecolor=mycolor['black'],capsize=3)
+            else:
+                ax.plot(self.idlist[0::spacing], self.bloch[i,0::spacing],'-s',label=labels[i],color=mycolor[ckeys[i]],markersize=3,markeredgewidth=0.3, markeredgecolor=mycolor['black'])
         if 'idMax' in kwargs:
             idMax = kwargs.get('idMax')
         else:
@@ -352,6 +401,8 @@ class StateTomographyFit:
             filename = self.runname + '_%s'%(method) + '_blochVector'
             if polar:
                 filename += '_polar'
+            if readout_error_mitigation:
+                filename += '_readErrMitig'
             plt.savefig(filepath + filename + '.png')
             #pickle.dump(filepath, open(filepath + filename + '.pickle', "wb"))
             plt.show()
@@ -360,7 +411,7 @@ class StateTomographyFit:
         plt.close()
 
 
-    def plot_denisty_matrix(self,save=False,**kwargs):
+    def plot_denisty_matrix(self,save=False,readout_error_mitigation=False,**kwargs):
         self.tlist = self.Gate2Time(gatetime=idGateTime[exp0.device])
         fig, axs = plt.subplots(ncols=2, nrows=1)
         fig.set_size_inches(5 * 2, 5)
@@ -390,6 +441,8 @@ class StateTomographyFit:
             if not os.path.exists(filepath):
                 os.mkdir(filepath)
             filename = self.runname
+            if readout_error_mitigation:
+                filename += '_readErrMitig'
             plt.savefig(filepath + filename + '.png')
             #pickle.dump(filepath, open(filepath + filename + '.pickle', "wb"))
             plt.show()
@@ -397,7 +450,7 @@ class StateTomographyFit:
             plt.show()
         plt.close()
 
-    def saveBloch2csv(self,filepath,bootstrap=False,**kwargs):
+    def saveBloch2csv(self,filepath,bootstrap=False,readout_error_mitigation=False,**kwargs):
         if not bootstrap:
             data = zip(self.idlist, self.tlist, np.real(self.bloch[0, :]), np.real(self.bloch[1, :]),
                        np.real(self.bloch[2, :]))
@@ -418,6 +471,8 @@ class StateTomographyFit:
             header += [ 'var_vx', 'var_vy', 'var_vz']
         if not os.path.exists(filepath):
             os.makedirs(filepath)
+        if readout_error_mitigation:
+            filename += '_readoutErrMitig'
         with open(filepath + filename + '.csv', 'w', newline='') as file:
             writer = csv.writer(file, delimiter=',')
             writer.writerow(header)
@@ -425,17 +480,19 @@ class StateTomographyFit:
         print('BlochVector csv save at %s+%s'%(filepath, filename))
         return filename
 
-    def saveRho2csv(self,filepath):
+    def saveRho2csv(self,filepath,readout_error_mitigate):
         data = zip(self.idlist,self.tlist,np.real(self.rhomat[0,:]),np.imag(self.rhomat[0,:]),np.real(self.rhomat[1,:]),np.imag(self.rhomat[1,:]),\
                    np.real(self.rhomat[2,:]),np.imag(self.rhomat[2,:]),np.real(self.rhomat[3,:]),np.imag(self.rhomat[3,:]))
         filename = self.runname
+        if readout_error_mitigate:
+            filename += '_readErrMitig'
         header = ['id','time','rho00(real)','rho00(imag)','rho10(real)','rho10(imag)','rho01(real)','rho01(imag)','rho11(real)','rho11(imag)']
         with open(filepath + filename+'_%s'%(method)  +'_densityMatrix.csv', 'w', newline='') as file:
             writer = csv.writer(file, delimiter=',')
             writer.writerow(header)
             writer.writerows(data)
 
-    def blochInPolarCoordinate(self,plot=True,save=False,**kwargs):
+    def blochInPolarCoordinate(self,plot=True,save=False,readout_error_mitigate=False,**kwargs):
         samples_polar = np.zeros(self.bloch.shape, dtype=float)
         for i in range(self.bloch.shape[1]):
             samples_polar[:, i] = blochInPolarCoordinate(self.bloch[:, i])
@@ -456,6 +513,8 @@ class StateTomographyFit:
                 if not os.path.exists(filepath):
                     os.mkdir(filepath)
                 filename = self.runname
+                if readout_error_mitigate:
+                    filename += '_readErrMitig'
                 plt.savefig(filepath + filename + '_polarCordi.png')
                 # pickle.dump(filepath, open(filepath + filename + '.pickle', "wb"))
                 plt.show()
@@ -465,13 +524,13 @@ class StateTomographyFit:
         return samples_polar
 
 
-def saveVar2csv(datapath,csvfile,varmat,Nboots=1000):
+def saveVar2csv(datapath,csvfile,varmat,Nboots=1000,bootstrap_method='classical'):
     header = ['id', 'time', 'vx', 'vy', 'vz','var_vx', 'var_vy', 'var_vz']
     allRows = np.genfromtxt(datapath + csvfile + '.csv', delimiter=',',skip_header=1)
     if allRows.shape[0] == varmat.shape[1]:
         new_data = np.concatenate((allRows,varmat.transpose()),axis=-1)
     # write to new csv
-    new_csvfile = csvfile.split('.')[0] + '_appendVar_Nboots=%s.csv'%(str(Nboots))
+    new_csvfile = csvfile.split('.')[0] + '_appendVar%s_Nboots=%s.csv'%(bootstrap_method.capitalize(),str(Nboots))
     with open(filepath + new_csvfile, 'w', newline='') as file:
         writer = csv.writer(file, delimiter=',')
         writer.writerow(header)
@@ -496,27 +555,31 @@ ckeys = list(mycolor.keys())
 # edit from below
 # read date from
 datapath = r'/home/haimeng/LocalProjects/IBM-PMME/Data/raw/'
+readout_error_mitigate = True
+bootstrap_method = 'bayesian'
 # raw data info
-for p in ['x','y']:
-    for eigen in ['plus','minus']:
-        i = 1 #which qubit
+for p in ['x']:
+    for eigen in ['plus']:
+        i = 0 #which qubit
         pstate = '%s'%(p).capitalize()+'%sState'%(eigen)
-        exp0 = ExpObject(runname='MeasMainqFree_Q%d_%s_QS_ZminusState'%(i,pstate), datestr='20201210', device='ibmq_ourense', pstate=pstate,
+        exp0 = ExpObject(runname='MeasMainqFree_Q%d_%s_QS_ZplusState'%(i,pstate), datestr='20210114', device='ibmq_athens', pstate=pstate,
                          runNo='run1')
         datapath = r"/home/haimeng/LocalProjects/IBM-PMME/Data/raw/" + exp0.device + "/" + exp0.datestr + "/" + exp0.runname + "/" + exp0.runNo +"/"
         # store data to
         filepath = r"/home/haimeng/LocalProjects/IBM-PMME/Analysis/" + exp0.device + "/" + exp0.datestr + '/'
         tomo_fit = StateTomographyFit()
         save = True
-        Nboots = 10
-        tomo_fit.fit_state_from_run(datapath,exp0,qubiti=[i],polar=False,strid=8)
+        Nboots = 100
+        tomo_fit.fit_state_from_run(datapath,exp0,qubiti=[i],polar=False,strid=8,readout_error_mitigation=readout_error_mitigate)
         # change where x-axis stops using keyword argument 'idMax';
         # change x-axis resolution using argument 'spacing', sampling frequency equals 1 sample per spacing*4 Id gates
-        tomo_fit.plot_bloch_vector(save=save,filepath=filepath,spacing=1,polar=False)
-        csvfile = tomo_fit.saveBloch2csv(filepath,polar=False)
-        tomo_fit.assign_errorbars_from_run(exp0,qubiti=[i],Nboots=Nboots)
-        saveVar2csv(filepath, csvfile, tomo_fit.var, Nboots=Nboots)
-        tomo_fit.blochInPolarCoordinate(save=save,filepath=filepath)
+        tomo_fit.assign_errorbars_from_run(exp0,qubiti=[i],Nboots=Nboots,readout_error_mitigation=readout_error_mitigate,bootstrap_method=bootstrap_method)
+        tomo_fit.plot_bloch_vector(save=save, filepath=filepath, spacing=1, polar=False,
+                                   readout_error_mitigation=readout_error_mitigate)
+        csvfile = tomo_fit.saveBloch2csv(filepath, polar=False, readout_error_mitigation=readout_error_mitigate)
+
+        saveVar2csv(filepath, csvfile, tomo_fit.var, Nboots=Nboots, bootstrap_method=bootstrap_method)
+        tomo_fit.blochInPolarCoordinate(save=save,filepath=filepath,readout_error_mitigate=readout_error_mitigate)
         #tomo_fit.plot_denisty_matrix(save=False,filepath=filepath,spacing=2)
         # tomo_fit.saveBloch2csv(filepath,polar=False)
         # tomo_fit.save2csv(filepath)
