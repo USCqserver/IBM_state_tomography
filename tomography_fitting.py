@@ -327,7 +327,11 @@ class StateTomographyFit:
         self.pmat = np.array(self.pmat).transpose()
 
     def assign_errorbars_from_run(self,exp0,qubiti,repre='bloch',Nboots=1000,readout_error_mitigation=False,bootstrap_method='bayesian'):
-        setattr(self,'var',np.empty(self.bloch.shape,dtype=np.float))
+        """
+        default setting is in Bloch representation
+        """
+        setattr(self,'var',np.zeros(self.bloch.shape,dtype=np.float))
+        setattr(self,'polarVar',np.zeros(self.bloch.shape,dtype=np.float))
         if readout_error_mitigation:
             assignment_probs = make_confusion_matrix(exp0, qubiti=self.qindex, shots=nsamples)
         else:
@@ -341,6 +345,8 @@ class StateTomographyFit:
             # initialize empty array
             if repre == 'bloch':
                 rhomat = np.empty((3,Nboots),dtype=np.float)
+                if hasattr(self,'polar'):
+                    rhomat_polar = np.empty((3,Nboots),dtype=np.float)
             for r in range(int(Nboots)):
                 rhist = resample_hist(histograms,bootstrap_method)
                 if method == 'ibm':
@@ -351,8 +357,12 @@ class StateTomographyFit:
                     tomo_result = rigetti_tomography(rhist,readout_povm)
                     if repre=='bloch':
                         rhomat[:,r] = Qobj2BlochVec(tomo_result.rho_est)
+                if hasattr(self, 'polar'):
+                    rhomat_polar[:,r] = blochInPolarCoordinate(rhomat[:,r])
             print('complete boostrapping at id = %s'%(str(numIdGates)))
             self.var[:, i] = cal_qobjList_variance(rhomat, repre=repre)
+            if hasattr(self,'polarVar'):
+                self.polarVar[:,i] = cal_qobjList_variance(rhomat_polar, repre='bloch')
 
 
     def Gate2Time(self,gatetime):
@@ -450,25 +460,27 @@ class StateTomographyFit:
             plt.show()
         plt.close()
 
-    def saveBloch2csv(self,filepath,bootstrap=False,readout_error_mitigation=False,**kwargs):
-        if not bootstrap:
+    def saveBloch2csv(self,filepath,bootstrap=False,polar=True,readout_error_mitigation=False,**kwargs):
+        header = ['id', 'time', 'vx', 'vy', 'vz']
+        if not (hasattr(self,'var') and hasattr(self,'polar')):
             data = zip(self.idlist, self.tlist, np.real(self.bloch[0, :]), np.real(self.bloch[1, :]),
                        np.real(self.bloch[2, :]))
-        else:
+        elif not hasattr(self,'var') and hasattr(self,'polar'):
+            header +=  ['|v|', 'theta', 'phi']
             data = zip(self.idlist,self.tlist,np.real(self.bloch[0,:]),np.real(self.bloch[1,:]),np.real(self.bloch[2,:]),
-                       np.real(self.var[0,:]),np.real(self.var[1,:]),np.real(self.var[2,:]))
+                       np.real(self.polar[0,:]),np.real(self.polar[1,:]),np.real(self.polar[2,:]))
+        elif hasattr(self,'var') and hasattr(self,'polar') and hasattr(self,'polarVar'):
+            header +=  ['var_vx', 'var_vy', 'var_vz', '|v|', 'theta', 'phi', 'var_|v|', 'var_theta', 'var_phi']
+            data = zip(self.idlist, self.tlist, np.real(self.bloch[0, :]), np.real(self.bloch[1, :]),
+                       np.real(self.bloch[2, :]),self.var[0,:],self.var[1,:],self.var[2,:],
+                       np.real(self.polar[0, :]), np.real(self.polar[1, :]), np.real(self.polar[2, :]),
+                       self.polarVar[0,:],self.polarVar[1,:],self.polarVar[2,:])
+        elif not hasattr(self,'polar') and hasattr(self,'var'):
+            header += ['var_vx', 'var_vy', 'var_vz']
+            data = zip(self.idlist, self.tlist, np.real(self.bloch[0, :]), np.real(self.bloch[1, :]),
+                       np.real(self.bloch[2, :]), self.var[0, :], self.var[1, :], self.var[2, :])
         filename = self.runname +'_%s'%(method) +'_blochVector'
-        if 'polar' in kwargs:
-            polar = kwargs.get('polar')
-        else:
-            polar = False
-        if polar:
-            header = ['id', 'time', '|v|', 'theta', 'phi']
-            filename += '_polar'
-        else:
-            header = ['id', 'time', 'vx', 'vy', 'vz']
-        if bootstrap:
-            header += [ 'var_vx', 'var_vy', 'var_vz']
+
         if not os.path.exists(filepath):
             os.makedirs(filepath)
         if readout_error_mitigation:
@@ -496,6 +508,8 @@ class StateTomographyFit:
         samples_polar = np.zeros(self.bloch.shape, dtype=float)
         for i in range(self.bloch.shape[1]):
             samples_polar[:, i] = blochInPolarCoordinate(self.bloch[:, i])
+        setattr(self,'polar',samples_polar)
+
         if plot:
             fig, axes = plt.subplots(ncols=3, nrows=1, figsize=(3 * 6, 6))
             labels = [r'$|v|$', r'$\theta$', r'$\phi$']
@@ -524,17 +538,25 @@ class StateTomographyFit:
         return samples_polar
 
 
-def saveVar2csv(datapath,csvfile,varmat,Nboots=1000,bootstrap_method='classical'):
-    header = ['id', 'time', 'vx', 'vy', 'vz','var_vx', 'var_vy', 'var_vz']
-    allRows = np.genfromtxt(datapath + csvfile + '.csv', delimiter=',',skip_header=1)
-    if allRows.shape[0] == varmat.shape[1]:
-        new_data = np.concatenate((allRows,varmat.transpose()),axis=-1)
-    # write to new csv
-    new_csvfile = csvfile.split('.')[0] + '_appendVar%s_Nboots=%s.csv'%(bootstrap_method.capitalize(),str(Nboots))
-    with open(filepath + new_csvfile, 'w', newline='') as file:
-        writer = csv.writer(file, delimiter=',')
-        writer.writerow(header)
-        writer.writerows(new_data)
+    def saveVar2csv(self,datapath,csvfile,Nboots=1000,bootstrap_method='classical'):
+        header = np.genfromtxt(datapath + csvfile + '.csv', delimiter=',', dtype=str, max_rows=1)
+        header += ['var_vx', 'var_vy', 'var_vz','var_vx_polar', 'var_vy_polar', 'var_vz_polar']
+        allRows = np.genfromtxt(datapath + csvfile + '.csv', delimiter=',',skip_header=1)
+        if allRows.shape[0] == self.var.shape[1]:
+            new_data = np.concatenate((allRows,self.var.transpose()),axis=-1)
+        else:
+            new_data = np.concatenate((allRows, self.var), axis=-1)
+        if hasattr(self,'polarVar'):
+            if new_data.shape[0] == self.polarVar.shape[1]:
+                new_data = np.concatenate((new_data, self.polarVar.transpose()), axis=-1)
+            else:
+                new_data = np.concatenate((new_data, self.polarVar), axis=-1)
+        # write to new csv
+        new_csvfile = csvfile.split('.')[0] + '_appendVar%s_Nboots=%s.csv'%(bootstrap_method.capitalize(),str(Nboots))
+        with open(filepath + new_csvfile, 'w', newline='') as file:
+            writer = csv.writer(file, delimiter=',')
+            writer.writerow(header)
+            writer.writerows(new_data)
 
 num_qubits = len(qubits)
 dimension = 2 ** num_qubits
@@ -558,12 +580,14 @@ datapath = r'/home/haimeng/LocalProjects/IBM-PMME/Data/raw/'
 readout_error_mitigate = True
 bootstrap_method = 'bayesian'
 # raw data info
-for p in ['x']:
-    for eigen in ['plus']:
-        i = 0 #which qubit
-        pstate = '%s'%(p).capitalize()+'%sState'%(eigen)
-        exp0 = ExpObject(runname='MeasMainqFree_Q%d_%s_QS_ZplusState'%(i,pstate), datestr='20210114', device='ibmq_athens', pstate=pstate,
-                         runNo='run1')
+pstates = ['%s'%(p).capitalize()+'%sState'%(eigen) for p in ['x','y'] for eigen in ['plus','minus']]
+rpstates = ['randomState%d'%(d) for d in range(5)]
+# for pstate in pstates + rpstates[:3]+rpstates[4:]:
+for pstate in ['XplusState']:
+    for qs in ['ZplusState']:
+        i = 1 #which qubit
+        exp0 = ExpObject(runname='MeasMainqFree_Q%d_%s_QS_%s'%(i,pstate,qs), datestr='20210129', device='ibmq_santiago', pstate=pstate,
+                         runNo='run2')
         datapath = r"/home/haimeng/LocalProjects/IBM-PMME/Data/raw/" + exp0.device + "/" + exp0.datestr + "/" + exp0.runname + "/" + exp0.runNo +"/"
         # store data to
         filepath = r"/home/haimeng/LocalProjects/IBM-PMME/Analysis/" + exp0.device + "/" + exp0.datestr + '/'
@@ -571,15 +595,15 @@ for p in ['x']:
         save = True
         Nboots = 100
         tomo_fit.fit_state_from_run(datapath,exp0,qubiti=[i],polar=False,strid=8,readout_error_mitigation=readout_error_mitigate)
+        tomo_fit.blochInPolarCoordinate(save=save,filepath=filepath,readout_error_mitigate=readout_error_mitigate)
         # change where x-axis stops using keyword argument 'idMax';
         # change x-axis resolution using argument 'spacing', sampling frequency equals 1 sample per spacing*4 Id gates
         tomo_fit.assign_errorbars_from_run(exp0,qubiti=[i],Nboots=Nboots,readout_error_mitigation=readout_error_mitigate,bootstrap_method=bootstrap_method)
         tomo_fit.plot_bloch_vector(save=save, filepath=filepath, spacing=1, polar=False,
                                    readout_error_mitigation=readout_error_mitigate)
-        csvfile = tomo_fit.saveBloch2csv(filepath, polar=False, readout_error_mitigation=readout_error_mitigate)
+        csvfile = tomo_fit.saveBloch2csv(filepath, bootstrap=True,polar=True, readout_error_mitigation=readout_error_mitigate)
 
-        saveVar2csv(filepath, csvfile, tomo_fit.var, Nboots=Nboots, bootstrap_method=bootstrap_method)
-        tomo_fit.blochInPolarCoordinate(save=save,filepath=filepath,readout_error_mitigate=readout_error_mitigate)
+        # tomo_fit.saveVar2csv(filepath, csvfile, Nboots=Nboots, bootstrap_method=bootstrap_method)
         #tomo_fit.plot_denisty_matrix(save=False,filepath=filepath,spacing=2)
         # tomo_fit.saveBloch2csv(filepath,polar=False)
         # tomo_fit.save2csv(filepath)

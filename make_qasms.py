@@ -347,7 +347,7 @@ def write_state_tomo_dd_on_spectator_qasms(**kwargs):
     f.close
 
 circuitPath = r"../Circuits/"
-device = "ibmq_athens"
+device = "ibmq_santiago"
 measurement_config = 'mainq'
 runname = 'MeasMainStateTomo_freeEvo'
 measurement_basis = list(meas_params.keys())
@@ -400,7 +400,7 @@ def write_free_and_dd_w_spectators(qindex,pstate):
         # # dense sampling rate
         num_repetition = 24
         num_complete = 0  # completed circuits
-        sampling_rate = 36 # 48-72 for athens, 24 for ibmqx2, armonk, vigo, 36 for valencia,
+        sampling_rate = 72 # 48-72 for athens, 24 for ibmqx2, armonk,ibmqx2 vigo, 36 for valencia,72 for santiago
         rprep_params = random_u3_gate() if pstate['main'][0] == 'randomState'[0] else None
         for r in range(num_complete, num_repetition):
             numIdGates = sampling_rate * r
@@ -428,12 +428,12 @@ pkeys5 = ['XplusState', 'XminusState', 'YplusState', 'YminusState',  'ZminusStat
 pkeyr = 'randomState'
 for p in pkeys5:
     pstates = {'main': p,
-               'spec': 'ZplusState'}
-    write_free_and_dd_w_spectators(qindex=3,pstate=pstates)
+               'spec': 'ZminusState'}
+    write_free_and_dd_w_spectators(qindex=1,pstate=pstates)
 for i in range(5):
     pstates = {'main': pkeyr + str(i),
-               'spec': 'ZplusState'}
-    write_free_and_dd_w_spectators(qindex=3,pstate=pstates)
+               'spec': 'ZminusState'}
+    write_free_and_dd_w_spectators(qindex=1,pstate=pstates)
 
 # check if a random qasm is valid
 # qasm_name = dict0["filepath"] + dict0["filename"]
