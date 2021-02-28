@@ -19,7 +19,9 @@ device_numQubit = {'ibmqx2':5,
                    'ibmq_vigo': 5,
                    'ibmq_ourense':5,
                    'ibmq_valencia':5,
-                   'ibmq_santiago':5}
+                   'ibmq_santiago':5,
+                   'ibmq_lima':5,
+                   'ibmq_quito':5}
 
 ddGateStr = {'X': 'u3(3.141592653589793,0,3.141592653589793)',
            'Y': 'u3(3.141592653589793,1.5707963267948966,1.5707963267948966)'}
@@ -347,7 +349,7 @@ def write_state_tomo_dd_on_spectator_qasms(**kwargs):
     f.close
 
 circuitPath = r"../Circuits/"
-device = "ibmq_santiago"
+device = "ibmq_quito"
 measurement_config = 'mainq'
 runname = 'MeasMainStateTomo_freeEvo'
 measurement_basis = list(meas_params.keys())
@@ -426,14 +428,14 @@ def write_free_and_dd_w_spectators(qindex,pstate):
         #     write_measurement_error_mitigation_qasm(p, 'obsZ', exp_dict=dict0)
 pkeys5 = ['XplusState', 'XminusState', 'YplusState', 'YminusState',  'ZminusState']
 pkeyr = 'randomState'
-for p in pkeys5:
-    pstates = {'main': p,
-               'spec': 'ZminusState'}
-    write_free_and_dd_w_spectators(qindex=1,pstate=pstates)
-for i in range(5):
+# for p in pkeys5:
+#     pstates = {'main': p,
+#                'spec': 'ZminusState'}
+#     write_free_and_dd_w_spectators(qindex=1,pstate=pstates)
+for i in range(1):
     pstates = {'main': pkeyr + str(i),
                'spec': 'ZminusState'}
-    write_free_and_dd_w_spectators(qindex=1,pstate=pstates)
+    write_free_and_dd_w_spectators(qindex=3,pstate=pstates)
 
 # check if a random qasm is valid
 # qasm_name = dict0["filepath"] + dict0["filename"]
