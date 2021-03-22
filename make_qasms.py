@@ -2,10 +2,11 @@ from datetime import date
 import numpy as np
 from qiskit.circuit import library
 from qiskit.qasm import qasm
-from qiskit.quantum_info import operators
+from qiskit.quantum_info import operators, Operator
 from qiskit.extensions import unitary
 from math import pi
 import os
+from utility import cartesian_to_polar, myStr2float
 
 rdigit = 5
 # measurement gates are all u2 gate
@@ -46,6 +47,50 @@ prep_params = {"XplusState": ('u2',str(0),str(round(pi,rdigit))),
                'YminusState':('u2',str(round(-pi/2,rdigit)),str(round(-pi/2,rdigit))),
                'ZplusState':('id',''),
                'ZminusState':('u3',str(round(pi,rdigit)),str(-round(pi/2,rdigit)),str(round(pi/2,rdigit)))}
+# construct 4 tetrahegron states
+tetrahegrons_in_cartesian = {'tetra0': (np.sqrt(8/9),0,-1/3),
+                             'tetra1': (-np.sqrt(2/9), np.sqrt(2/3), -1/3),
+                             'tetra2': (-np.sqrt(2/9),-np.sqrt(2/3),-1/3),
+                             'tetra3': (0,0,-1)}
+def gate_params_for_unitary(mat):
+    mat = Operator(np.array(mat))
+    randu = unitary.UnitaryGate(mat)
+    qstr = randu.qasm()
+    angles = [n for n in qstr.split(' ')[-2].split('(')[1].split(')')[0].split(',')]
+    for i, n in enumerate(angles):
+        if 'pi' in n:
+            angles[i] = n.replace('pi', str(np.pi))
+    theta, phi, lamb = [round(myStr2float(n), rdigit) for n in angles]
+    # TODO: a test function to make sure u_in and u_out are the same, can we use diamond norm?
+    mat_out = library.U3Gate(theta, phi, lamb)
+    phases = []
+    for m,n in zip(mat.data.flatten(),mat_out.to_matrix().flatten()):
+        if m <= 0.1**rdigit and n<=0.1**rdigit:
+            phases.append(1)
+        else:
+            phases.append(m/n)
+    equal = all(abs(phases[0] - ele) < 0.1 ** rdigit for ele in phases) # phases are the same for all elements
+    if equal:
+        return ('u3', str(theta), str(phi), str(lamb))
+    else:
+        raise ValueError('U3 gate parameters does not match the input random unitary!')
+
+def gate_params_from_bloch_vector(bvector):
+    """
+    :param bvector: tuples (x,y,z) bloch vector in cartesian coordinates
+    :return: gate name and gate params for state initialization
+    """
+    print(bvector)
+    r, theta, phi = cartesian_to_polar(bvector)
+    u00, u10 = np.cos(theta/2), np.sin(theta/2)* (np.cos(phi) + 1j * np.sin(phi))
+    u01 = np.sqrt(u10 * np.conj(u10)/(u10 * np.conj(u10) + u00 * np.conj(u00)))
+    u11 = - u01 * np.conj(u00) / np.conj(u10)
+    print([[u00,u01],[u10,u11]])
+    return gate_params_for_unitary([[u00,u01],[u10,u11]])
+
+tetrahegron_params = {key : gate_params_from_bloch_vector(item) for key,item in tetrahegrons_in_cartesian.items()}
+
+prep_params.update(tetrahegron_params)
 
 def construct_exp_dict(device,pstate,mbasis,circuitPath,**kwargs):
     """
@@ -55,10 +100,12 @@ def construct_exp_dict(device,pstate,mbasis,circuitPath,**kwargs):
     datestr = today.strftime("%Y%m%d")
     if 'runname' in kwargs:
         runname = kwargs.get('runname')
-    elif 'mainq' in kwargs and isinstance(pstate,dict):
-        runname = '_'.join(['Meas%sFree'%(kwargs.get('measurement_config').capitalize() if 'measurement_config' in kwargs else ''),'Q%d'%(int(kwargs.get('mainq'))),pstate['main'],'QS',pstate['spec']])
+    elif 'measurement_config' in kwargs:
+        runname = 'Meas%sFree'%(kwargs.get('measurement_config').capitalize())
+    if 'mainq' in kwargs and isinstance(pstate,dict):
+        runname = '_'.join([runname,'Q%d'%(int(kwargs.get('mainq'))),pstate['main'],'QS',pstate['spec']])
     elif isinstance(pstate,str):
-        runname = 'Free' + '_' + pstate
+        runname = kwargs.get('runname')
     exp_dict = {"runname": runname, "date": datestr, "device": device,
                  "circuitPath": circuitPath,'pstate': pstate, 'mbasis': mbasis,
                 "filepath": circuitPath + device + '/' + datestr + '/' + runname + '/'}
@@ -241,7 +288,7 @@ def write_state_prep(f,exp_dict,**kwargs):
             gatename = exp_dict["pstate"]['main']
         else:
             gatename = exp_dict["pstate"]['spec']
-        if gatename[0] == 'randomState'[0]:
+        if gatename[0] == 'randomState'[0]: # random unitary string
             rprep_params = kwargs.get('rprep_params')
             prepGateStr = 'u3(' + rprep_params[1] + ',' + rprep_params[2] + ',' + rprep_params[3] + ')'
         else:
@@ -349,9 +396,9 @@ def write_state_tomo_dd_on_spectator_qasms(**kwargs):
     f.close
 
 circuitPath = r"../Circuits/"
-device = "ibmq_quito"
+device = "ibmq_athens"
 measurement_config = 'mainq'
-runname = 'MeasMainStateTomo_freeEvo'
+runname = 'MeasMainStateTomo_freeEvoLong'
 measurement_basis = list(meas_params.keys())
 # folder /device/date/state_tomography_freeEvo/
 # pstates = ['XminusState', 'YminusState','YplusState']
@@ -407,7 +454,8 @@ def write_free_and_dd_w_spectators(qindex,pstate):
         for r in range(num_complete, num_repetition):
             numIdGates = sampling_rate * r
             for mbasis in measurement_basis:
-                dict0 = construct_exp_dict(mainq=qindex, device=device, pstate=pstate, mbasis=mbasis,
+                dict0 = construct_exp_dict(runname='MeasMainqFreeShort',
+                    mainq=qindex, device=device, pstate=pstate, mbasis=mbasis,
                                            circuitPath=circuitPath, numIdGates=numIdGates,measurement_config=measurement_config)
                 write_state_tomo_free_qasms(measure_config=measurement_config,exp_dict=dict0,rprep_params=rprep_params)
         # measurement mitigation circuits
@@ -428,14 +476,16 @@ def write_free_and_dd_w_spectators(qindex,pstate):
         #     write_measurement_error_mitigation_qasm(p, 'obsZ', exp_dict=dict0)
 pkeys5 = ['XplusState', 'XminusState', 'YplusState', 'YminusState',  'ZminusState']
 pkeyr = 'randomState'
-# for p in pkeys5:
-#     pstates = {'main': p,
-#                'spec': 'ZminusState'}
-#     write_free_and_dd_w_spectators(qindex=1,pstate=pstates)
-for i in range(1):
-    pstates = {'main': pkeyr + str(i),
+# a new config: 4 tetrahegron states and 1 random state
+trkeys = list(tetrahegrons_in_cartesian.keys()) + [pkeyr]
+for p in trkeys:
+    pstates = {'main': p,
                'spec': 'ZminusState'}
-    write_free_and_dd_w_spectators(qindex=3,pstate=pstates)
+    write_free_and_dd_w_spectators(qindex=0,pstate=pstates)
+# for i in range(1):
+#     pstates = {'main': pkeyr + str(i),
+#                'spec': 'ZminusState'}
+#     write_free_and_dd_w_spectators(qindex=3,pstate=pstates)
 
 # check if a random qasm is valid
 # qasm_name = dict0["filepath"] + dict0["filename"]

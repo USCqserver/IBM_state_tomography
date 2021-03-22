@@ -83,9 +83,9 @@ def locate_datafile(expobj,obs,numIdGates,**kwargs):
         # dataname = 'MeasError_Mitigate' + '_' + expobj.datestr + '_' + expobj.device + '_' + kwargs.get(
         #     'pstate') + '_'
     else:
-        dataname = expobj.runname + '_' + expobj.datestr + '_' + expobj.device + '_' + 'numIdGates=' + str(
+        dataname = '_'.join(expobj.runname.split('_')[:5]) + '_' + expobj.datestr + '_' + expobj.device + '_' + 'numIdGates=' + str(
         numIdGates) + '_' + obs
-    data_fullpath = '/home/haimeng/LocalProjects/IBM-PMME/Data/raw/' + expobj.device + '/' + expobj.datestr + '/' + expobj.runname + '/' + expobj.runNo + '/' + dataname + '*.txt'
+    data_fullpath = '/home/haimeng/LocalProjects/IBM-PMME/Data/raw/' + expobj.device + '/' + expobj.datestr + '/' + expobj.runname + '*/' + expobj.runNo + '/' + dataname + '*.txt'
     datafile = glob.glob(data_fullpath)
     if len(datafile)>=1:
         return datafile[0]
@@ -370,7 +370,7 @@ class StateTomographyFit:
     def Gate2Time(self,gatetime):
         return self.idlist * gatetime
 
-    def plot_bloch_vector(self,save=False,readout_error_mitigation=False,spacing=1,**kwargs):
+    def plot_bloch_vector(self,exp0,save=False,show=True,readout_error_mitigation=False,spacing=1,**kwargs):
         self.tlist = self.Gate2Time(gatetime=idGateTime[exp0.device])
         fig, ax = plt.subplots(ncols=1, nrows=1)
         fig.set_size_inches(7, 5)
@@ -417,13 +417,12 @@ class StateTomographyFit:
                 filename += '_readErrMitig'
             plt.savefig(filepath + filename + '.png')
             #pickle.dump(filepath, open(filepath + filename + '.pickle', "wb"))
-            plt.show()
-        else:
+        if show:
             plt.show()
         plt.close()
 
 
-    def plot_denisty_matrix(self,save=False,readout_error_mitigation=False,**kwargs):
+    def plot_denisty_matrix(self,exp0,save=False,readout_error_mitigation=False,**kwargs):
         self.tlist = self.Gate2Time(gatetime=idGateTime[exp0.device])
         fig, axs = plt.subplots(ncols=2, nrows=1)
         fig.set_size_inches(5 * 2, 5)
@@ -491,7 +490,7 @@ class StateTomographyFit:
             writer = csv.writer(file, delimiter=',')
             writer.writerow(header)
             writer.writerows(data)
-        print('BlochVector csv save at %s+%s'%(filepath, filename))
+        print('BlochVector csv save at %s%s'%(filepath, filename))
         return filename
 
     def saveRho2csv(self,filepath,readout_error_mitigate):
@@ -506,7 +505,7 @@ class StateTomographyFit:
             writer.writerow(header)
             writer.writerows(data)
 
-    def blochInPolarCoordinate(self,plot=True,save=False,readout_error_mitigate=False,**kwargs):
+    def blochInPolarCoordinate(self,plot=True,show=True,save=False,readout_error_mitigate=False,**kwargs):
         samples_polar = np.zeros(self.bloch.shape, dtype=float)
         for i in range(self.bloch.shape[1]):
             samples_polar[:, i] = blochInPolarCoordinate(self.bloch[:, i])
@@ -527,20 +526,19 @@ class StateTomographyFit:
                 if 'filepath' in kwargs:
                     filepath = kwargs.get('filepath')
                 if not os.path.exists(filepath):
-                    os.mkdir(filepath)
+                    Path(filepath).mkdir(parents=True)
                 filename = self.runname
                 if readout_error_mitigate:
                     filename += '_readErrMitig'
                 plt.savefig(filepath + filename + '_polarCordi.png')
                 # pickle.dump(filepath, open(filepath + filename + '.pickle', "wb"))
-                plt.show()
-            else:
+            if show:
                 plt.show()
             plt.close()
         return samples_polar
 
 
-    def saveVar2csv(self,datapath,csvfile,Nboots=1000,bootstrap_method='classical'):
+    def saveVar2csv(self,datapath,filepath,csvfile,Nboots=1000,bootstrap_method='classical'):
         header = np.genfromtxt(datapath + csvfile + '.csv', delimiter=',', dtype=str, max_rows=1)
         header += ['var_vx', 'var_vy', 'var_vz','var_vx_polar', 'var_vy_polar', 'var_vz_polar']
         allRows = np.genfromtxt(datapath + csvfile + '.csv', delimiter=',',skip_header=1)
@@ -585,33 +583,33 @@ bootstrap_method = 'bayesian'
 pstates = ['%s'%(p).capitalize()+'%sState'%(eigen) for p in ['x','y'] for eigen in ['plus','minus']]
 rpstates = ['randomState%d'%(d) for d in range(5)]
 # for pstate in pstates + rpstates[:3]+rpstates[4:]:
-for pstate in pstates + rpstates:
-    for qs in ['ZplusState']:
-        for j in range(5):
-            i = 0 #which qubit
-            exp0 = ExpObject(runname='MeasMainqFree_Q%d_%s_QS_%s'%(i,pstate,qs), datestr='20210114', device='ibmq_athens', pstate=pstate,
-                             runNo='run2')
-            datapath = r"/home/haimeng/LocalProjects/IBM-PMME/Data/raw/" + exp0.device + "/" + exp0.datestr + "/" + exp0.runname + "/" + exp0.runNo +"/"
-            # store data to
-            filepath = r"/home/haimeng/LocalProjects/IBM-PMME/Analysis/" + exp0.device + "/" + exp0.datestr + '/'
-            tomo_fit = StateTomographyFit()
-            save = True
-            Nboots = 100
-            tomo_fit.fit_state_from_run(datapath,exp0,qubiti=[i],polar=False,strid=8,readout_error_mitigation=readout_error_mitigate)
-            tomo_fit.blochInPolarCoordinate(save=save,filepath=filepath,readout_error_mitigate=readout_error_mitigate)
-            # change where x-axis stops using keyword argument 'idMax';
-            # change x-axis resolution using argument 'spacing', sampling frequency equals 1 sample per spacing*4 Id gates
-            tomo_fit.assign_errorbars_from_run(exp0,qubiti=[i],Nboots=Nboots,readout_error_mitigation=readout_error_mitigate,bootstrap_method=bootstrap_method)
-            tomo_fit.plot_bloch_vector(save=save, filepath=filepath, spacing=1, polar=False,
-                                       readout_error_mitigation=readout_error_mitigate)
-            csvfile = tomo_fit.saveBloch2csv(filepath, bootstrap=True,polar=True, readout_error_mitigation=readout_error_mitigate)
-
-            # tomo_fit.saveVar2csv(filepath, csvfile, Nboots=Nboots, bootstrap_method=bootstrap_method)
-            #tomo_fit.plot_denisty_matrix(save=False,filepath=filepath,spacing=2)
-            # tomo_fit.saveBloch2csv(filepath,polar=False)
-            # tomo_fit.save2csv(filepath)
-            # tomo_fit.saveRho2csv(filepath)
-            # import pickle
-            # filepath = r"/home/haimeng/LocalProjects/IBM-PMME/Analysis/"
-            # filename = exp0.runname + '_' + exp0.datestr +'_'+exp0.device +'_'+exp0.pstate +'_run1.pickle'
-            # pickle.dump(data, open( filepath+filename, "wb" ))
+# for pstate in pstates + rpstates:
+#     for qs in ['ZplusState']:
+#         for j in range(5):
+#             i = 0 #which qubit
+#             exp0 = ExpObject(runname='MeasMainqFree_Q%d_%s_QS_%s'%(i,pstate,qs), datestr='20210114', device='ibmq_athens', pstate=pstate,
+#                              runNo='run2')
+#             datapath = r"/home/haimeng/LocalProjects/IBM-PMME/Data/raw/" + exp0.device + "/" + exp0.datestr + "/" + exp0.runname + "/" + exp0.runNo +"/"
+#             # store data to
+#             filepath = r"/home/haimeng/LocalProjects/IBM-PMME/Analysis/" + exp0.device + "/" + exp0.datestr + '/'
+#             tomo_fit = StateTomographyFit()
+#             save = True
+#             Nboots = 100
+#             tomo_fit.fit_state_from_run(datapath,exp0,qubiti=[i],polar=False,strid=8,readout_error_mitigation=readout_error_mitigate)
+#             tomo_fit.blochInPolarCoordinate(save=save,filepath=filepath,readout_error_mitigate=readout_error_mitigate)
+#             # change where x-axis stops using keyword argument 'idMax';
+#             # change x-axis resolution using argument 'spacing', sampling frequency equals 1 sample per spacing*4 Id gates
+#             tomo_fit.assign_errorbars_from_run(exp0,qubiti=[i],Nboots=Nboots,readout_error_mitigation=readout_error_mitigate,bootstrap_method=bootstrap_method)
+#             tomo_fit.plot_bloch_vector(save=save, filepath=filepath, spacing=1, polar=False,
+#                                        readout_error_mitigation=readout_error_mitigate)
+#             csvfile = tomo_fit.saveBloch2csv(filepath, bootstrap=True,polar=True, readout_error_mitigation=readout_error_mitigate)
+#
+#             # tomo_fit.saveVar2csv(filepath, csvfile, Nboots=Nboots, bootstrap_method=bootstrap_method)
+#             #tomo_fit.plot_denisty_matrix(save=False,filepath=filepath,spacing=2)
+#             # tomo_fit.saveBloch2csv(filepath,polar=False)
+#             # tomo_fit.save2csv(filepath)
+#             # tomo_fit.saveRho2csv(filepath)
+#             # import pickle
+#             # filepath = r"/home/haimeng/LocalProjects/IBM-PMME/Analysis/"
+#             # filename = exp0.runname + '_' + exp0.datestr +'_'+exp0.device +'_'+exp0.pstate +'_run1.pickle'
+#             # pickle.dump(data, open( filepath+filename, "wb" ))

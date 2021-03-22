@@ -56,3 +56,26 @@ def blochInPolarCoordinate(vector):
     theta = acos(vector[2] / v)/np.pi
     phi = atan2(vector[1] , vector[0])/np.pi
     return np.array([v, theta, phi])
+
+def cartesian_to_polar(bvector):
+    """
+    :param bvector: tuples (x,y,z)
+    :return: polar coordinates (r, theta, phi) in radians
+    """
+    x,y,z = bvector
+    r = np.sqrt(x**2 + y**2 + z**2)
+    if x!=0:
+        phi = np.arctan(y/x)
+    elif x==0 and y!=0:
+        phi = np.arctan(np.inf)
+    elif x==0 and y==0:
+        phi=0
+    return (r,np.arccos(z/r),phi)
+
+
+def myStr2float(string):
+    if '/' in string:
+        a,b = string.split('/')
+        return float(a)/float(b)
+    else:
+        return float(string)
