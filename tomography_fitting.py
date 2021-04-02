@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from math import acos, atan
 from random import choices
 from pathlib import Path
+import copy
 if method == 'rigetti':
     import qutip as qt
     from collections import namedtuple
@@ -181,7 +182,7 @@ def make_povm(confusion_rate_matrix=[[1, 0], [0, 1]]):
 
 def Qobj2BlochVec(qobj):
     vlist = [qobj * QX, qobj * QY, qobj * QZ]
-    vector = np.array([a.tr() for a in vlist])
+    vector = np.real(np.array([a.tr() for a in vlist]))
     return vector
 
 
@@ -211,7 +212,7 @@ def ibm_tomography(histograms):
 
 def resample_hist(hist,bootstrap_method='classical'):
     """
-    classical bootstrap
+    classical/bayesian bootstrap
     hist is 3 by 2 array for single qubit
     return a resampled hist
     """
@@ -249,30 +250,8 @@ def cal_qobjList_variance(rhomat, repre):
     return rho_variance
 
 class StateTomographyFit:
-    def __init__(self):
-        self.idlist = None
-        self.rhomat = None
-        self.bloch = None
-        self.pmat = None
-        self.tlist = None
-        self.runname = None
-        self.config = None
-        self.qindex = None
-
-    def fit_state_from_run(self,datapath,exp0,qubiti,polar=False,readout_error_mitigation=False,**kwargs):
-        """
-        fit qubit time evlotion tomography from raw data
-        :param datapath: raw data path, str
-        :param exp0: run info, ExpObject namedtuple
-        :param qubiti: list of qubit index
-        :return: None
-        """
-        self.qindex = qubiti
-        self.config = exp0
-        self.runname = '_'.join([exp0.runname, exp0.datestr , exp0.device, exp0.pstate, exp0.runNo])
-        self.runname += '_Q%s'%(str(qubiti[0])) # single qubit tomography
-        # change the information below
-        datafiles_run = glob.glob(datapath+ '*numIdGates*.txt')
+    def __init__(self,exp0,datapath,qubiti,**kwargs):
+        datafiles_run = glob.glob(datapath + '*numIdGates*.txt')
         if 'strid' in kwargs:
             strid = kwargs.get('strid')
         elif '_' in exp0.device:
@@ -282,23 +261,46 @@ class StateTomographyFit:
                 strid = 5
         else:
             strid = 4
-        idlist = sorted(list(set([int(f.split('/')[-1].split('_')[strid].split('=')[1]) for f in datafiles_run])))
-        self.idlist = []
+        self.idlist = sorted(list(set([int(f.split('/')[-1].split('_')[strid].split('=')[1]) for f in datafiles_run])))
+        self.idlist = np.array(self.idlist)
+        self.tlist = self.Gate2Time(gatetime=idGateTime[exp0.device])
         self.rhomat = []
         self.pmat = []
         self.bloch = []
+        self.runname = '_'.join([exp0.runname, exp0.datestr, exp0.device, exp0.pstate, exp0.runNo])
+        self.runname += '_Q%s' % (str(qubiti[0]))  # single qubit tomography
+        self.config = exp0
+        self.qindex = qubiti
+
+    def reinitialize(self):
+        b = copy.deepcopy(self)
+        b.rhomat = []
+        b.bloch = []
+        b.pmat = []
+        return b
+
+    def fit_state_from_run(self,polar=False,readout_error_mitigation=False,isBootstrap=False,bootstrap_method='classical'):
+        """
+        fit qubit time evlotion tomography from raw data
+        :param datapath: raw data path, str
+        :param exp0: run info, ExpObject namedtuple
+        :param qubiti: list of qubit index
+        :return: None
+        """
         if readout_error_mitigation:
-            assignment_probs = make_confusion_matrix(exp0, qubiti=self.qindex, shots=nsamples)
+            assignment_probs = make_confusion_matrix(self.config, qubiti=self.qindex, shots=nsamples)
         else:
             assignment_probs = np.array([[1, 0], [0, 1]])
         num_qubits = 1
         readout_povm = o_ut.make_diagonal_povm(o_ut.POVM_PI_BASIS ** num_qubits, assignment_probs)
 
-        for i in range(len(idlist)):
-            numIdGates = int(idlist[i])
-            histograms = make_tomography_hist(exp0, numIdGates=numIdGates,qubiti=qubiti,shots=nsamples)
+        for i in range(len(self.idlist)):
+            numIdGates = int(self.idlist[i])
+            histograms = make_tomography_hist(self.config, numIdGates=numIdGates,qubiti=self.qindex,shots=nsamples)
+            if isBootstrap:
+                histograms = resample_hist(histograms,bootstrap_method=bootstrap_method)
             if histograms.shape[0] == 3:
-                self.idlist.append(numIdGates)
+                # self.idlist.append(numIdGates)
                 self.pmat.append(histograms.flatten()/nsamples)
                 if method == 'rigetti':
                     tomo_result = rigetti_tomography(histograms,readout_povm)
@@ -311,8 +313,7 @@ class StateTomographyFit:
 
             else:
                 print("did not find all three config for tomography at id=%s"%(numIdGates))
-        self.idlist = np.array(self.idlist)
-        self.tlist = self.Gate2Time(gatetime=idGateTime[exp0.device])
+
 
 
         def Qobjlist2Nparray(Qlist):
@@ -329,11 +330,13 @@ class StateTomographyFit:
         self.pmat = np.array(self.pmat).transpose()
 
     def assign_errorbars_from_run(self,exp0,qubiti,repre='bloch',Nboots=1000,readout_error_mitigation=False,bootstrap_method='bayesian'):
+        # TODO: this method can be combined into generate_bootstrapped_tomography_samples()
         """
         default setting is in Bloch representation
         """
-        setattr(self,'var',np.zeros(self.bloch.shape,dtype=np.float))
-        setattr(self,'polarVar',np.zeros(self.bloch.shape,dtype=np.float))
+        setattr(self, 'var', np.zeros(self.bloch.shape, dtype=np.float))
+        setattr(self, 'polarVar', np.zeros(self.bloch.shape, dtype=np.float))
+
         if readout_error_mitigation:
             assignment_probs = make_confusion_matrix(exp0, qubiti=self.qindex, shots=nsamples)
         else:
@@ -361,7 +364,7 @@ class StateTomographyFit:
                         rhomat[:,r] = Qobj2BlochVec(tomo_result.rho_est)
                 if hasattr(self, 'polar'):
                     rhomat_polar[:,r] = blochInPolarCoordinate(rhomat[:,r])
-            print('complete boostrapping at id = %s'%(str(numIdGates)))
+
             self.var[:, i] = cal_qobjList_variance(rhomat, repre=repre)
             if hasattr(self,'polarVar'):
                 self.polarVar[:,i] = cal_qobjList_variance(rhomat_polar, repre='bloch')
@@ -461,7 +464,7 @@ class StateTomographyFit:
             plt.show()
         plt.close()
 
-    def saveBloch2csv(self,filepath,bootstrap=False,polar=True,readout_error_mitigation=False,**kwargs):
+    def saveBloch2csv(self,filepath,readout_error_mitigation=False,**kwargs):
         header = ['id', 'time', 'vx', 'vy', 'vz']
         if not (hasattr(self,'var') and hasattr(self,'polar')):
             data = zip(self.idlist, self.tlist, np.real(self.bloch[0, :]), np.real(self.bloch[1, :]),
@@ -480,12 +483,15 @@ class StateTomographyFit:
             header += ['var_vx', 'var_vy', 'var_vz']
             data = zip(self.idlist, self.tlist, np.real(self.bloch[0, :]), np.real(self.bloch[1, :]),
                        np.real(self.bloch[2, :]), self.var[0, :], self.var[1, :], self.var[2, :])
-        filename = self.runname +'_%s'%(method) +'_blochVector'
-
         if not os.path.exists(filepath):
             os.makedirs(filepath)
-        if readout_error_mitigation:
-            filename += '_readoutErrMitig'
+
+        if 'filename' in kwargs:
+            filename = kwargs.get('filename')
+        else:
+            filename = self.runname +'_%s'%(method) +'_blochVector'
+            if readout_error_mitigation:
+                filename += '_readoutErrMitig'
         with open(filepath + filename + '.csv', 'w', newline='') as file:
             writer = csv.writer(file, delimiter=',')
             writer.writerow(header)
@@ -535,7 +541,7 @@ class StateTomographyFit:
             if show:
                 plt.show()
             plt.close()
-        return samples_polar
+        # return samples_polar
 
 
     def saveVar2csv(self,datapath,filepath,csvfile,Nboots=1000,bootstrap_method='classical'):
@@ -557,6 +563,49 @@ class StateTomographyFit:
             writer = csv.writer(file, delimiter=',')
             writer.writerow(header)
             writer.writerows(new_data)
+
+
+def generate_bootstrapped_tomography_dataset(tomo_fit, filepath, Nboots=1000, readout_error_mitigation=False,
+                                             bootstrap_method='bayesian',repre='bloch', save=False,**kwargs):
+    setattr(tomo_fit, 'var', np.zeros(tomo_fit.bloch.shape, dtype=np.float))
+    setattr(tomo_fit, 'polarVar', np.zeros(tomo_fit.bloch.shape, dtype=np.float))
+    # initialize empty array
+    if repre == 'bloch':
+        rhomat = np.zeros((Nboots,)+tomo_fit.bloch.shape, dtype=np.float)
+        if hasattr(tomo_fit, 'polar'):
+            rhomat_polar = np.zeros((Nboots,)+ tomo_fit.polar.shape, dtype=np.float)
+    if save:
+        if os.path.exists(filepath):
+            Nboots_offset = len(glob.glob(filepath+'*oots*.cvs'))
+            print('find %s bootstrapped samples in %s'%(Nboots_offset,filepath))
+        else:
+            Nboots_offset = 0
+    for r in range(int(Nboots)):
+        tomo_fit_new = tomo_fit.reinitialize()
+        tomo_fit_new.fit_state_from_run(polar=False, readout_error_mitigation=readout_error_mitigation, isBootstrap=True,
+                                bootstrap_method=bootstrap_method)
+        tomo_fit_new.blochInPolarCoordinate(save=False, show=False, readout_error_mitigate=readout_error_mitigate)
+
+        if save:
+            if 'filename' in kwargs:
+                filename = kwargs.get('filename')
+            else:
+                filename = ''
+            filename += '_Boot%s'%(r+Nboots_offset)
+            tomo_fit_new.saveBloch2csv(filepath,bootstrap=True, polar=True, readout_error_mitigation=readout_error_mitigate,filename=filename)
+
+        rhomat[r] = tomo_fit_new.bloch
+        if hasattr(tomo_fit, 'polar'):
+            tomo_fit_new.blochInPolarCoordinate(plot=False,save=False,show=False,filepath=filepath)
+            rhomat_polar[r] = tomo_fit_new.polar
+        print('complete boostrap samples #%d' % (r))
+    # calculate variance for every time instance
+    # up to this point the rhomat array dim is (Nboots,3,nsamples)
+    for i in range(len(tomo_fit.idlist)):
+        # rhomat here needs to be 3 by Nboots
+        tomo_fit.var[:, i] = cal_qobjList_variance(rhomat[:,:,i].transpose(), repre=repre)
+        if hasattr(tomo_fit, 'polarVar'):
+            tomo_fit.polarVar[:, i] = cal_qobjList_variance(rhomat_polar[:,:,i].transpose(), repre='bloch')
 
 num_qubits = len(qubits)
 dimension = 2 ** num_qubits

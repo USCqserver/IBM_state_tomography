@@ -55,7 +55,7 @@ def blochInPolarCoordinate(vector):
     v = np.sqrt(np.sum(vector ** 2))
     theta = acos(vector[2] / v)/np.pi
     phi = atan2(vector[1] , vector[0])/np.pi
-    return np.array([v, theta, phi])
+    return np.real(np.array([v, theta, phi]))
 
 def cartesian_to_polar(bvector):
     """
