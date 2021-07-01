@@ -6,8 +6,8 @@ from qiskit.quantum_info import operators, Operator
 from qiskit.extensions import unitary
 from math import pi
 import os
-from utility import cartesian_to_polar, myStr2float
-
+from utility import cartesian_to_polar, myStr2float, paulix, pauliy, pauliz
+import re
 rdigit = 5
 # measurement gates are all u2 gate
 meas_params = {"obsZ": None,
@@ -56,10 +56,26 @@ def gate_params_for_unitary(mat):
     mat = Operator(np.array(mat))
     randu = unitary.UnitaryGate(mat)
     qstr = randu.qasm()
-    angles = [n for n in qstr.split(' ')[-2].split('(')[1].split(')')[0].split(',')]
+    angles_0 = [n for n in qstr.split(' ')[-2].split('(')[1].split(')')[0].split(',')]
+    angles = [n.replace('pi', str(np.pi)) if 'pi' in n else n for n in angles_0]
     for i, n in enumerate(angles):
-        if 'pi' in n:
-            angles[i] = n.replace('pi', str(np.pi))
+        if '*' in n and '/' not in n:
+            numbers = angles[i].split('*')
+            numbers = [float(f) for f in numbers]
+            angles[i] = str(np.prod(numbers))
+        elif '/' in n and '*' not in n:
+            numbers = angles[i].split('/')
+            numbers = [float(f) for f in numbers]
+            angles[i] = str(numbers[0]/numbers[1])
+        elif '/' in n and '*' in n:
+            numbers = re.split('[*/]',n)
+            numbers = [float(f) for f in numbers]
+            m = n.index('*')
+            d = n.index('/')
+            if m<d:
+                angles[i] = str(numbers[0] * numbers[1] / numbers[2])
+            else:
+                angles[i] = str(numbers[0] / numbers[1] * numbers[2])
     theta, phi, lamb = [round(myStr2float(n), rdigit) for n in angles]
     # TODO: a test function to make sure u_in and u_out are the same, can we use diamond norm?
     mat_out = library.U3Gate(theta, phi, lamb)
@@ -85,7 +101,14 @@ def gate_params_from_bloch_vector(bvector):
     u00, u10 = np.cos(theta/2), np.sin(theta/2)* (np.cos(phi) + 1j * np.sin(phi))
     u01 = np.sqrt(u10 * np.conj(u10)/(u10 * np.conj(u10) + u00 * np.conj(u00)))
     u11 = - u01 * np.conj(u00) / np.conj(u10)
+    ugate = np.array([[u00,u01],[u10,u11]])
+    gstate = np.array([[1],[0]])
+    psi = np.matmul(ugate, gstate)
+    rho = np.matmul(psi,np.matrix.getH(psi))
+    print('unitary')
     print([[u00,u01],[u10,u11]])
+    print('bloch')
+    print([np.trace(np.matmul(p,rho)) for p in [paulix,pauliy,pauliz]])
     return gate_params_for_unitary([[u00,u01],[u10,u11]])
 
 tetrahegron_params = {key : gate_params_from_bloch_vector(item) for key,item in tetrahegrons_in_cartesian.items()}
@@ -98,15 +121,21 @@ def construct_exp_dict(device,pstate,mbasis,circuitPath,**kwargs):
     """
     today = date.today()
     datestr = today.strftime("%Y%m%d")
+    if 'spec_num' in kwargs:
+        spec_num = kwargs.get('spec_num')
+    else:
+        spec_num = device_numQubit[device] - 1
+
     if 'runname' in kwargs:
         runname = kwargs.get('runname')
     elif 'measurement_config' in kwargs:
         runname = 'Meas%sFree'%(kwargs.get('measurement_config').capitalize())
     if 'mainq' in kwargs and isinstance(pstate,dict):
-        runname = '_'.join([runname,'Q%d'%(int(kwargs.get('mainq'))),pstate['main'],'QS',pstate['spec']])
+        runname = '_'.join([runname,'Q%d'%(int(kwargs.get('mainq'))),pstate['main'],'QS%d'%(spec_num),pstate['spec']])
     elif isinstance(pstate,str):
         runname = kwargs.get('runname')
-    exp_dict = {"runname": runname, "date": datestr, "device": device,
+
+    exp_dict = {"runname": runname, "date": datestr, "device": device, "spec_num":spec_num,
                  "circuitPath": circuitPath,'pstate': pstate, 'mbasis': mbasis,
                 "filepath": circuitPath + device + '/' + datestr + '/' + runname + '/'}
     if 'mainq' in kwargs:
@@ -274,11 +303,15 @@ def write_state_tomo_dd_qasms(**kwargs):
     for i in range(numQubits):
         f.write('measure q[%d] -> c[%d];\n'%(i,i))
     f.close
+
+def make_specq_list(n):
+    return list(range(1, n+1))
+
 def write_state_prep(f,exp_dict,**kwargs):
     """
     pstate is a string or a dictionary of strings
     """
-    numQubits = numQubits = device_numQubit[exp_dict['device']]
+    numQubits = device_numQubit[exp_dict['device']]
     if 'mainq' in exp_dict:
         mainq = exp_dict['mainq']
     for i in range(numQubits):
@@ -286,8 +319,10 @@ def write_state_prep(f,exp_dict,**kwargs):
         # get the gate type
         if i == mainq:
             gatename = exp_dict["pstate"]['main']
-        else:
+        elif i in make_specq_list(exp_dict['spec_num']):
             gatename = exp_dict["pstate"]['spec']
+        else:
+            gatename = 'ZplusState'
         if gatename[0] == 'randomState'[0]: # random unitary string
             rprep_params = kwargs.get('rprep_params')
             prepGateStr = 'u3(' + rprep_params[1] + ',' + rprep_params[2] + ',' + rprep_params[3] + ')'
@@ -445,23 +480,23 @@ def write_free_and_dd():
                 dict0 = construct_dd_exp_dict(runname=runname,device=device,pstate=pstate,mbasis=mbasis,circuitPath=circuitPath,numDDrep=numDDgates)
                 write_state_tomo_dd_qasms(exp_dict=dict0)
 
-def write_free_and_dd_w_spectators(qindex,pstate):
+def write_free_and_dd_w_spectators(qindex,pstate,spec_num=4):
         # # dense sampling rate
         num_repetition = 24
         num_complete = 0  # completed circuits
-        sampling_rate = 72 # 48-72 for athens, 24 for ibmqx2, armonk,ibmqx2 vigo, 36 for valencia,72 for santiago
+        sampling_rate = 144 # 48-72 for athens, 24 for ibmqx2, armonk,ibmqx2 vigo, 36 for valencia,72 for santiago
         rprep_params = random_u3_gate() if pstate['main'][0] == 'randomState'[0] else None
         for r in range(num_complete, num_repetition):
             numIdGates = sampling_rate * r
             for mbasis in measurement_basis:
-                dict0 = construct_exp_dict(runname='MeasMainqFreeShort',
+                dict0 = construct_exp_dict(runname='SpecMeasMainqFreeLong',
                     mainq=qindex, device=device, pstate=pstate, mbasis=mbasis,
-                                           circuitPath=circuitPath, numIdGates=numIdGates,measurement_config=measurement_config)
+                                           circuitPath=circuitPath, numIdGates=numIdGates,measurement_config=measurement_config,spec_num=spec_num)
                 write_state_tomo_free_qasms(measure_config=measurement_config,exp_dict=dict0,rprep_params=rprep_params)
         # measurement mitigation circuits
         for p in ['ZplusState', 'ZminusState']:
             dict0 = construct_exp_dict(mainq=qindex,runname=dict0['runname'], device=device, pstate=p, mbasis='obsZ',
-                                       circuitPath=circuitPath)
+                                       circuitPath=circuitPath,spec_num=spec_num)
             write_measurement_error_mitigation_qasm(p, 'obsZ', exp_dict=dict0)
         # DD circtuis
         # for r in range(num_complete, num_repetition):
@@ -478,10 +513,18 @@ pkeys5 = ['XplusState', 'XminusState', 'YplusState', 'YminusState',  'ZminusStat
 pkeyr = 'randomState'
 # a new config: 4 tetrahegron states and 1 random state
 trkeys = list(tetrahegrons_in_cartesian.keys()) + [pkeyr]
-for p in trkeys:
-    pstates = {'main': p,
-               'spec': 'ZminusState'}
-    write_free_and_dd_w_spectators(qindex=0,pstate=pstates)
+nonMark_keys = ['XplusState','XminusState','tetra0','YplusState','YminusState']
+spec_states = ['ZplusState','ZminusState','XplusState']
+def main():
+    for i in range(5):
+        for s in spec_states:
+            pstates = {'main': 'tetra0',
+                       'spec': s}
+            write_free_and_dd_w_spectators(qindex=0,pstate=pstates,spec_num=i)
+
+
+if __name__ == "__main__":
+    main()
 # for i in range(1):
 #     pstates = {'main': pkeyr + str(i),
 #                'spec': 'ZminusState'}

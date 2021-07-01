@@ -7,7 +7,9 @@ import glob
 import numpy as np
 from math import atan2, acos
 ExpObject = namedtuple('ExpObject', ['runname', 'datestr', 'device', 'pstate', 'runNo'])
-
+paulix = np.array([[0,1],[1,0]])
+pauliy = np.array([[0,-1j],[1j,0]])
+pauliz = np.array([[1,0],[0,-1]])
 def locate_datafile(expobj,obs,numIdGates):
     dataname = expobj.runname + '_' + expobj.datestr + '_' + expobj.device + '_' + 'numIdGates=' + str(
         numIdGates) + '_' + expobj.pstate + '_' + obs
@@ -64,14 +66,15 @@ def cartesian_to_polar(bvector):
     """
     x,y,z = bvector
     r = np.sqrt(x**2 + y**2 + z**2)
-    if x!=0:
-        phi = np.arctan(y/x)
-    elif x==0 and y!=0:
-        phi = np.arctan(np.inf)
-    elif x==0 and y==0:
-        phi=0
+    phi = np.arctan2(y,x)
     return (r,np.arccos(z/r),phi)
 
+def state2rho(psi):
+    psi = np.array(psi)
+    return np.matmul(psi,np.matrix.getH(psi))
+
+def rho2bloch(rho):
+    return np.array([np.trace(np.matmul(p,rho)) for p in [paulix, pauliy, pauliz]])
 
 def myStr2float(string):
     if '/' in string:

@@ -14,25 +14,22 @@ Output: rho as a numpy.ndarray, where rho is an approximate density matrix of th
 from qiskit import QuantumCircuit
 import qiskit.result.result
 import qiskit.result.models
-import qiskit.validation.base
+# import qiskit.validation.base
 from qiskit.ignis.verification.tomography import StateTomographyFitter
 from utility import *
 
-global AllStates
-AllStates = []
-
-def returnAllKLengthStates(setL, k): 
+def returnAllKLengthStates(setL, k, all_states):
     n = len(setL) 
-    returnAllKLengthStatesRec(setL, "", n, k) 
+    returnAllKLengthStatesRec(setL, "", n, k, all_states)
 
 '''Recursive method to return all strings of length k from set'''
-def returnAllKLengthStatesRec(setL, prefix, n, k): 
+def returnAllKLengthStatesRec(setL, prefix, n, k, all_states):
     if (k == 0) : 
-        AllStates.append(prefix)
+        all_states.append(prefix)
         return
     for i in range(n): 
         newPrefix = prefix + setL[i] 
-        returnAllKLengthStatesRec(setL, newPrefix, n, k - 1)
+        returnAllKLengthStatesRec(setL, newPrefix, n, k - 1, all_states)
         
 
 def IBM_QST_from_counts(countsListIN,basisStrListIN):
@@ -46,13 +43,14 @@ def IBM_QST_from_counts(countsListIN,basisStrListIN):
     tupleListIN = [(elem[0],) for elem in basisStrListIN]
     
     #Create list of all possible readout states as binary strings ex. ['001','000',....]
-    returnAllKLengthStates(['0','1'],num_qubits) #Makes AllStates list complete.
+    all_states = []
+    returnAllKLengthStates(['0','1'],num_qubits, all_states) #Makes AllStates list complete.
     
     #convert the list of count dictionaries from having binary keys to hexadecimal keys
     hexaDecimal_countsList=[]
     for i in range(len(countsListIN)):
         hex_countsDict={}
-        for key in AllStates:
+        for key in all_states:
             hex_key=str(hex(int(key, 2))) #convert key from binary to hex
             #print(key," ",hex_key) #A check
             hex_countsDict[hex_key]=countsListIN[i][key] #fill up new copy of dict with hex_keys
