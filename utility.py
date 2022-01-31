@@ -11,8 +11,10 @@ paulix = np.array([[0,1],[1,0]])
 pauliy = np.array([[0,-1j],[1j,0]])
 pauliz = np.array([[1,0],[0,-1]])
 def locate_datafile(expobj,obs,numIdGates):
-    dataname = expobj.runname + '_' + expobj.datestr + '_' + expobj.device + '_' + 'numIdGates=' + str(
-        numIdGates) + '_' + expobj.pstate + '_' + obs
+    # dataname = expobj.runname[:-2]+'*'  + expobj.datestr + '_' + expobj.device + '_' + 'numIdGates=' + str(
+    #     numIdGates) + '_' + expobj.pstate + '_' + obs
+    dataname = expobj.runname[:-2]+'*'  + expobj.datestr + '_' + expobj.device + '_' + 'numIdGates=' + str(
+        numIdGates) +'*' + obs
     data_fullpath = '/home/haimeng/LocalProjects/IBM-PMME/Data/raw/' + expobj.device + '/' + expobj.datestr + '/' + expobj.runname + '/' + expobj.runNo + '/' + dataname + '*.txt'
     datafile = glob.glob(data_fullpath)
     if len(datafile)>=1:

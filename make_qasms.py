@@ -304,14 +304,21 @@ def write_state_tomo_dd_qasms(**kwargs):
         f.write('measure q[%d] -> c[%d];\n'%(i,i))
     f.close
 
-def make_specq_list(n):
-    return list(range(1, n+1))
+def make_specq_list(n,reverse=False):
+    if reverse:
+        return list(range(4-n+1,5))
+    else:
+        return list(range(1, n+1))
 
 def write_state_prep(f,exp_dict,**kwargs):
     """
     pstate is a string or a dictionary of strings
     """
     numQubits = device_numQubit[exp_dict['device']]
+    if 'reverse' in kwargs:
+        reverse = kwargs.get('reverse')
+    else:
+        reverse = False
     if 'mainq' in exp_dict:
         mainq = exp_dict['mainq']
     for i in range(numQubits):
@@ -319,7 +326,7 @@ def write_state_prep(f,exp_dict,**kwargs):
         # get the gate type
         if i == mainq:
             gatename = exp_dict["pstate"]['main']
-        elif i in make_specq_list(exp_dict['spec_num']):
+        elif i in make_specq_list(exp_dict['spec_num'],reverse=reverse):
             gatename = exp_dict["pstate"]['spec']
         else:
             gatename = 'ZplusState'
@@ -348,6 +355,10 @@ def write_state_tomo_free_qasms(measure_config='all',**kwargs):
         exp_dict = kwargs.get("exp_dict")
     else:
         print("input dictionary name error")
+    if 'reverse' in kwargs:
+        reverse = kwargs.get('reverse')
+    else:
+        reverse = False
     if not os.path.exists(exp_dict["filepath"]):
         os.makedirs(exp_dict["filepath"])
     mainq = int(exp_dict['mainq']) # get the mainq index
@@ -360,9 +371,9 @@ def write_state_tomo_free_qasms(measure_config='all',**kwargs):
     # state preparation
     if exp_dict['pstate']['main'][0] == 'randomState'[0]:
         rprep_params = kwargs.get('rprep_params')
-        write_state_prep(f, exp_dict,rprep_params=rprep_params)
+        write_state_prep(f, exp_dict,rprep_params=rprep_params,reverse=reverse)
     else:
-        write_state_prep(f,exp_dict)
+        write_state_prep(f,exp_dict,reverse=reverse)
     # free evolution
     for d in range(exp_dict["numIdGates"]):
         f.write(barrierStr)
@@ -480,7 +491,7 @@ def write_free_and_dd():
                 dict0 = construct_dd_exp_dict(runname=runname,device=device,pstate=pstate,mbasis=mbasis,circuitPath=circuitPath,numDDrep=numDDgates)
                 write_state_tomo_dd_qasms(exp_dict=dict0)
 
-def write_free_and_dd_w_spectators(qindex,pstate,spec_num=4):
+def write_free_and_dd_w_spectators(qindex,pstate,spec_num=4,reverse=False):
         # # dense sampling rate
         num_repetition = 24
         num_complete = 0  # completed circuits
@@ -489,10 +500,10 @@ def write_free_and_dd_w_spectators(qindex,pstate,spec_num=4):
         for r in range(num_complete, num_repetition):
             numIdGates = sampling_rate * r
             for mbasis in measurement_basis:
-                dict0 = construct_exp_dict(runname='SpecMeasMainqFreeLong',
+                dict0 = construct_exp_dict(runname='SpecRevMeasMainqFreeLong',
                     mainq=qindex, device=device, pstate=pstate, mbasis=mbasis,
                                            circuitPath=circuitPath, numIdGates=numIdGates,measurement_config=measurement_config,spec_num=spec_num)
-                write_state_tomo_free_qasms(measure_config=measurement_config,exp_dict=dict0,rprep_params=rprep_params)
+                write_state_tomo_free_qasms(measure_config=measurement_config,exp_dict=dict0,rprep_params=rprep_params,reverse=reverse)
         # measurement mitigation circuits
         for p in ['ZplusState', 'ZminusState']:
             dict0 = construct_exp_dict(mainq=qindex,runname=dict0['runname'], device=device, pstate=p, mbasis='obsZ',
@@ -520,7 +531,7 @@ def main():
         for s in spec_states:
             pstates = {'main': 'tetra0',
                        'spec': s}
-            write_free_and_dd_w_spectators(qindex=0,pstate=pstates,spec_num=i)
+            write_free_and_dd_w_spectators(qindex=0,pstate=pstates,spec_num=i, reverse=True)
 
 
 if __name__ == "__main__":

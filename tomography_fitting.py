@@ -1,4 +1,5 @@
 method = 'ibm'
+readout_error_mitigate = True
 import os
 import pickle
 import csv
@@ -8,6 +9,8 @@ from math import acos, atan
 from random import choices
 from pathlib import Path
 import copy
+from measurement_error_mitigation import mem_on_data
+
 if method == 'rigetti':
     import qutip as qt
     from collections import namedtuple
@@ -24,6 +27,11 @@ elif method == 'ibm':
     SX = np.array([[0, 1], [1, 0]])
     SY = np.array([[0, -1j], [1j, 0]])
     SZ = np.array([[1, 0], [0, -1]])
+
+spec_pstates = [ 'ZplusState', 'ZminusState','XplusState']
+tetra_pstates = ['tetra3', 'tetra2', 'tetra1', 'tetra0', 'randomState']
+nonmark_pstates = ['XplusState', 'XminusState', 'tetra0', 'YplusState', 'YminusState']
+
 TomoData = namedtuple('TomoData',['device','date','runname','qindex','pstate','spstate','runNo','jobNo'])
 qubits = [0]  # the list of qubits to perform tomography on
 nsamples = 8192
@@ -73,7 +81,16 @@ def count_outcome(raw_data, qubiti,shots):
         raise ValueError('histgram counting error')
     return data
 
-
+def count_outcome_dict(datapath):
+    file = open(datapath, "r")
+    datalines = file.readlines()
+    file.close()
+    raw_data = {}
+    for line in datalines[2:]:
+        bitstring = line.split(',')[0].split("\"")[1]
+        count = int(line.split(',')[1].split("\n")[0])
+        raw_data[bitstring] = count
+    return raw_data
 
 def locate_datafile(expobj,obs,numIdGates,**kwargs):
     # dataname = expobj.runname + '_' + expobj.datestr + '_' + expobj.device + '_' + 'numIdGates=' + str(
@@ -87,16 +104,18 @@ def locate_datafile(expobj,obs,numIdGates,**kwargs):
         dataname = '_'.join(expobj.runname.split('_')[:5]) + '_' + expobj.datestr + '_' + expobj.device + '_' + 'numIdGates=' + str(
         numIdGates) + '_' + obs
     data_fullpath = '/home/haimeng/LocalProjects/IBM-PMME/Data/raw/' + expobj.device + '/' + expobj.datestr + '/' + expobj.runname + '*/' + expobj.runNo + '/' + dataname + '*.txt'
+    if method == 'ibm' and readout_error_mitigate:
+        data_fullpath = data_fullpath.replace('raw','mem')
     datafile = glob.glob(data_fullpath)
     if len(datafile)==1:
         return datafile[0]
     if len(datafile)<1:
-        print(data_fullpath+' not found!')
+        raise ValueError(data_fullpath+' not found!')
     if len(datafile)>1:
         raise ValueError('found more than one file: %s'%(data_fullpath))
 
 
-def make_tomography_hist(expobj,numIdGates,qubiti,shots):
+def make_tomography_hist(expobj,numIdGates,qubiti,shots,readout_error_mitigate=True,**kwargs):
     """
     :param expobj:
     :param numIdGates:
@@ -291,11 +310,11 @@ class StateTomographyFit:
         :param qubiti: list of qubit index
         :return: None
         """
-        if readout_error_mitigation:
-            assignment_probs = make_confusion_matrix(self.config, qubiti=self.qindex, shots=nsamples)
-        else:
-            assignment_probs = np.array([[1, 0], [0, 1]])
         if method == 'rigetti':
+            if readout_error_mitigation:
+                assignment_probs = make_confusion_matrix(self.config, qubiti=self.qindex, shots=nsamples)
+            else:
+                assignment_probs = np.array([[1, 0], [0, 1]])
             num_qubits = 1
             readout_povm = o_ut.make_diagonal_povm(o_ut.POVM_PI_BASIS ** num_qubits, assignment_probs)
 
@@ -348,11 +367,13 @@ class StateTomographyFit:
         else:
             assignment_probs = np.array([[1, 0], [0, 1]])
         num_qubits = 1
-        readout_povm = o_ut.make_diagonal_povm(o_ut.POVM_PI_BASIS ** num_qubits, assignment_probs)
+        if method == 'rigetti':
+            readout_povm = o_ut.make_diagonal_povm(o_ut.POVM_PI_BASIS ** num_qubits, assignment_probs)
+        kwargs = make_mem_matrix(exp0, qubiti=self.qindex, shots=nsamples) if readout_error_mitigate and method == 'ibm' else {}
 
         for i in range(len(self.idlist)):
             numIdGates = int(self.idlist[i])
-            histograms = make_tomography_hist(exp0, numIdGates=numIdGates,qubiti=qubiti,shots=nsamples)
+            histograms = make_tomography_hist(exp0, numIdGates=numIdGates,qubiti=qubiti,shots=nsamples,**kwargs)
             # initialize empty array
             if repre == 'bloch':
                 rhomat = np.empty((3,Nboots),dtype=np.float)
@@ -631,8 +652,7 @@ ckeys = list(mycolor.keys())
 
 # edit from below
 # read date from
-datapath = r'/home/haimeng/LocalProjects/IBM-PMME/Data/raw/'
-readout_error_mitigate = False
+
 bootstrap_method = 'bayesian'
 # raw data info
 pstates = ['%s'%(p).capitalize()+'%sState'%(eigen) for p in ['x','y'] for eigen in ['plus','minus']]
