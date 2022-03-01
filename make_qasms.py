@@ -22,7 +22,8 @@ device_numQubit = {'ibmqx2':5,
                    'ibmq_valencia':5,
                    'ibmq_santiago':5,
                    'ibmq_lima':5,
-                   'ibmq_quito':5}
+                   'ibmq_quito':5,
+                   'ibmq_bogota': 5}
 
 ddGateStr = {'X': 'u3(3.141592653589793,0,3.141592653589793)',
            'Y': 'u3(3.141592653589793,1.5707963267948966,1.5707963267948966)'}
@@ -442,9 +443,9 @@ def write_state_tomo_dd_on_spectator_qasms(**kwargs):
     f.close
 
 circuitPath = r"../Circuits/"
-device = "ibmq_athens"
+device = "ibmq_bogota"
 measurement_config = 'mainq'
-runname = 'MeasMainStateTomo_freeEvoLong'
+# runname = 'MeasMainStateTomo_freeEvoLong'
 measurement_basis = list(meas_params.keys())
 # folder /device/date/state_tomography_freeEvo/
 # pstates = ['XminusState', 'YminusState','YplusState']
@@ -500,7 +501,7 @@ def write_free_and_dd_w_spectators(qindex,pstate,spec_num=4,reverse=False):
         for r in range(num_complete, num_repetition):
             numIdGates = sampling_rate * r
             for mbasis in measurement_basis:
-                dict0 = construct_exp_dict(runname='SpecRevMeasMainqFreeLong',
+                dict0 = construct_exp_dict(runname='NonMarkMeasMainqFreeLong',
                     mainq=qindex, device=device, pstate=pstate, mbasis=mbasis,
                                            circuitPath=circuitPath, numIdGates=numIdGates,measurement_config=measurement_config,spec_num=spec_num)
                 write_state_tomo_free_qasms(measure_config=measurement_config,exp_dict=dict0,rprep_params=rprep_params,reverse=reverse)
@@ -527,11 +528,11 @@ trkeys = list(tetrahegrons_in_cartesian.keys()) + [pkeyr]
 nonMark_keys = ['XplusState','XminusState','tetra0','YplusState','YminusState']
 spec_states = ['ZplusState','ZminusState','XplusState']
 def main():
-    for i in range(5):
-        for s in spec_states:
-            pstates = {'main': 'tetra0',
+    for s in spec_states:
+        for p in nonMark_keys:
+            pstates = {'main': p,
                        'spec': s}
-            write_free_and_dd_w_spectators(qindex=0,pstate=pstates,spec_num=i, reverse=True)
+            write_free_and_dd_w_spectators(qindex=0,pstate=pstates,spec_num=4, reverse=True)
 
 
 if __name__ == "__main__":
