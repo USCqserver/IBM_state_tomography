@@ -31,9 +31,12 @@ def generate_mem_data_from_raw(data,datadir):
                 f.write(line + '\n')
 
 def main():
-    for i in range(1,4):
-        runNo = 'run%d'%(i)
-        batch_list0 = [TomoData('ibmq_athens', '20210625', 'MeasMainqFreeLong', 0, p, s, runNo, i) for s in spec_pstates[1:]
+    datestr_list = ['20220228', '20220301', '20220302']
+    for datestr in datestr_list:
+        runNo = 'run1'
+        batch_list0 = [TomoData('ibmq_bogota', datestr, 'MeasMainqFreeLong', 0, p, s, runNo, i) for s in spec_pstates[:1]
+                   for i,p in enumerate(tetra_pstates)]
+        batch_list0 = [TomoData('ibmq_bogota', datestr, 'MeasMainqFreeLongXY4', 0, p, s, runNo, i) for s in spec_pstates[:1]
                    for i,p in enumerate(tetra_pstates)]
         # batch_list0 = [TomoData('ibmq_athens', '20210625', 'NonMarkMeasMainqFreeLong', 0, p, s, runNo, i) for s in spec_pstates
         #            for i,p in enumerate(nonmark_pstates)]

@@ -1,7 +1,14 @@
+"""
+starting Feb 28, 2022 run in qiskit 0.23.6
+before running in 0.19.1
+"""
 from datetime import date
 import numpy as np
 from qiskit.circuit import library
+from qiskit import transpile
+from qiskit.circuit.quantumcircuit import QuantumCircuit
 from qiskit.qasm import qasm
+from qiskit import IBMQ
 from qiskit.quantum_info import operators, Operator
 from qiskit.extensions import unitary
 from math import pi
@@ -24,9 +31,11 @@ device_numQubit = {'ibmqx2':5,
                    'ibmq_lima':5,
                    'ibmq_quito':5,
                    'ibmq_bogota': 5}
-
+token0 = '316cca1ff42067b9901b6a9e90ca76496e76b4a73139954176c6fe31a45572fcd37089924cbe5c41edb96a9b4c0e92e44451ed350e2a7e45dc809d26cd752eed'
+provider = IBMQ.enable_account(token0)
 ddGateStr = {'X': 'u3(3.141592653589793,0,3.141592653589793)',
            'Y': 'u3(3.141592653589793,1.5707963267948966,1.5707963267948966)'}
+
 
 def random_u3_gate():
     mat = operators.random.random_unitary(2)
@@ -145,6 +154,10 @@ def construct_exp_dict(device,pstate,mbasis,circuitPath,**kwargs):
         exp_dict['numIdGates'] = kwargs.get('numIdGates')
         exp_dict["filename"]= runname + '_' + datestr + '_' + device + '_' + 'numIdGates=' + str(
             exp_dict['numIdGates']) + '_' + exp_dict['mbasis'] + '.qasm'
+    elif 'numDDrep' in kwargs:
+        exp_dict['numDDrep'] = kwargs.get('numDDrep')
+        exp_dict["filename"] = runname + '_' + datestr + '_' + device + '_' + 'numXYXYseq=' + str(
+            exp_dict['numDDrep']) + '_' + mbasis + '.qasm'
     else:
         exp_dict["filename"] = runname + '_' + datestr + '_' + device + '_' + exp_dict['pstate'] + '_' + exp_dict['mbasis'] + '.qasm'
     return exp_dict
@@ -356,6 +369,7 @@ def write_state_tomo_free_qasms(measure_config='all',**kwargs):
         exp_dict = kwargs.get("exp_dict")
     else:
         print("input dictionary name error")
+    Exp = TomoExperiment(exp_dict)
     if 'reverse' in kwargs:
         reverse = kwargs.get('reverse')
     else:
@@ -400,47 +414,93 @@ def write_state_tomo_free_qasms(measure_config='all',**kwargs):
     else:
         for i in range(numQubits):
             f.write('measure q[%d] -> c[%d];\n' % (i, i))
-    f.close
+    f.close()
+    # transpilse and rewrite
+    Exp.transpile_and_rewrite(Exp.filepath+Exp.filename)
 
-def write_state_tomo_dd_on_spectator_qasms(**kwargs):
+class TomoExperiment:
+    def __init__(self, exp_config):
+        for key, value in exp_config.items():
+            setattr(self, key, value)
+    def get_backend(self):
+        return getattr(provider.backends,self.device)
+    def transpile_and_rewrite(self,qasm):
+        """
+        :param qasm: qasm filename
+        :return:
+        """
+        backend = self.get_backend()
+        f = QuantumCircuit().from_qasm_file(qasm)
+        f = transpile(f, backend=backend, optimization_level=2)
+        f2 = open(self.filepath + self.filename, "r+")
+        f2.seek(0)
+        f2.truncate()
+        f2.write(f.qasm())
+        f2.close()
+
+def write_state_tomo_dd_on_spectator_qasms(measure_config='all',**kwargs):
     """
-    DD on all qubits
+    DD on spec qubits on near qubits
     """
     if "exp_dict" in kwargs:
         exp_dict = kwargs.get("exp_dict")
     else:
         print("input dictionary name error")
+    Exp = TomoExperiment(exp_dict)
+    if 'reverse' in kwargs:
+        reverse = kwargs.get('reverse')
+    else:
+        reverse = False
     if not os.path.exists(exp_dict["filepath"]):
         os.makedirs(exp_dict["filepath"])
     numQubits = device_numQubit[exp_dict['device']]
     mainq = int(exp_dict['mainq'])  # get the mainq index
+    DDonSpecList = [mainq+1+2*i for i in range(2)]
     barrierStr = 'barrier %s;\n'%(write_qubit_index(numQubits))
+    idStr = lambda q: 'id q[%s];\n' % (q)
     DDseq = ['X', 'Y', 'X', 'Y']
     f = open(exp_dict["filepath"] + exp_dict["filename"], "w")
     # header for 5 qubit
     f.write("OPENQASM 2.0;\ninclude\"qelib1.inc\";\nqreg q[%s];\ncreg c[%s];\n"%(numQubits,numQubits))
     # state preparation
-    write_state_prep(f,exp_dict)
+    if exp_dict['pstate']['main'][0] == 'randomState'[0]:
+        rprep_params = kwargs.get('rprep_params')
+        write_state_prep(f, exp_dict, rprep_params=rprep_params, reverse=reverse)
+    else:
+        write_state_prep(f, exp_dict, reverse=reverse)
+    # free evolution w. DD
     for d in range(exp_dict["numDDrep"]):
         for i in range(len(DDseq)): #XYXY sequence, or XY$
             f.write(barrierStr)
             for j in range(numQubits):
-                if j != mainq:
-                    f.write(ddGateStr[DDseq[i]] + ' q[%s];\n'%(j))
+                if j in DDonSpecList:
+                    f.write(ddGateStr[DDseq[i]] + ' q[%s];\n' % (j))
+                else:
+                    f.write(idStr(j))
     # pre-measurement rotation
     if meas_params[exp_dict["mbasis"]] is not None:
         f.write(barrierStr)
         measGateStr = 'u2('+meas_params[exp_dict["mbasis"]][0]+','+meas_params[exp_dict["mbasis"]][1]+')'
         for i in range(numQubits):
-            qubitStr = 'q[%d]' %(i)
-            # if i == mainq:
-            f.write(measGateStr + ' ' + qubitStr + ';\n')
+            if measure_config == 'mainq':
+                if i == mainq:
+                    qubitStr = 'q[%d]' % (i)
+                    f.write(measGateStr + ' ' + qubitStr + ';\n')
+            else:
+                qubitStr = 'q[%d]' % (i)
+                f.write(measGateStr + ' ' + qubitStr + ';\n')
     # measurement
     f.write(barrierStr)
-    for i in range(numQubits):
-    # i = exp_dict['mainq']
+    if measure_config == 'mainq':
+        i = exp_dict['mainq']
         f.write('measure q[%d] -> c[%d];\n'%(i,i))
-    f.close
+    else:
+        for i in range(numQubits):
+            f.write('measure q[%d] -> c[%d];\n'%(i,i))
+    f.close()
+    # transpilse and rewrite
+    Exp.transpile_and_rewrite(Exp.filepath+Exp.filename)
+
 
 circuitPath = r"../Circuits/"
 device = "ibmq_bogota"
@@ -492,35 +552,47 @@ def write_free_and_dd():
                 dict0 = construct_dd_exp_dict(runname=runname,device=device,pstate=pstate,mbasis=mbasis,circuitPath=circuitPath,numDDrep=numDDgates)
                 write_state_tomo_dd_qasms(exp_dict=dict0)
 
-def write_free_and_dd_w_spectators(qindex,pstate,spec_num=4,reverse=False):
-        # # dense sampling rate
-        num_repetition = 24
-        num_complete = 0  # completed circuits
-        sampling_rate = 144 # 48-72 for athens, 24 for ibmqx2, armonk,ibmqx2 vigo, 36 for valencia,72 for santiago
-        rprep_params = random_u3_gate() if pstate['main'][0] == 'randomState'[0] else None
+def write_free_and_dd_w_spectators(qindex,pstate,spec_num=4,reverse=False, include_dd=False):
+    """
+    :param qindex:
+    :param pstate:
+    :param spec_num:
+    :param reverse:
+    :param include_dd:
+    :return:
+    """
+    # # dense sampling rate
+    num_repetition = 24
+    num_complete = 0  # completed circuits
+    sampling_rate = 144 # 48-72 for athens, 24 for ibmqx2, armonk,ibmqx2 vigo, 36 for valencia,72 for santiago
+    rprep_params = random_u3_gate() if pstate['main'][0] == 'randomState'[0] else None
+    """
+    for r in range(num_complete, num_repetition):
+        numIdGates = sampling_rate * r
+        for mbasis in measurement_basis:
+            dict0 = construct_exp_dict(runname='MeasMainqFreeLong',
+                mainq=qindex, device=device, pstate=pstate, mbasis=mbasis,
+                                       circuitPath=circuitPath, numIdGates=numIdGates,measurement_config=measurement_config,spec_num=spec_num)
+            write_state_tomo_free_qasms(measure_config=measurement_config,exp_dict=dict0,rprep_params=rprep_params,reverse=reverse)
+    # measurement mitigation circuits
+    for p in ['ZplusState', 'ZminusState']:
+        dict0 = construct_exp_dict(mainq=qindex,runname=dict0['runname'], device=device, pstate=p, mbasis='obsZ',
+                                   circuitPath=circuitPath,spec_num=spec_num)
+        write_measurement_error_mitigation_qasm(p, 'obsZ', exp_dict=dict0)
+    """
+    # DD circtuis
+    if include_dd:
         for r in range(num_complete, num_repetition):
-            numIdGates = sampling_rate * r
+            numDDgates = sampling_rate * r
             for mbasis in measurement_basis:
-                dict0 = construct_exp_dict(runname='NonMarkMeasMainqFreeLong',
-                    mainq=qindex, device=device, pstate=pstate, mbasis=mbasis,
-                                           circuitPath=circuitPath, numIdGates=numIdGates,measurement_config=measurement_config,spec_num=spec_num)
-                write_state_tomo_free_qasms(measure_config=measurement_config,exp_dict=dict0,rprep_params=rprep_params,reverse=reverse)
-        # measurement mitigation circuits
+                dict0 = construct_exp_dict(runname='MeasMainqFreeLongXY4',
+                        mainq=qindex,device=device, pstate=pstate, mbasis=mbasis,
+                                              circuitPath=circuitPath, numDDrep=int(numDDgates/4),measurement_config=measurement_config,spec_num=spec_num)
+                write_state_tomo_dd_on_spectator_qasms(measure_config=measurement_config,exp_dict=dict0,rprep_params=rprep_params,reverse=reverse)
         for p in ['ZplusState', 'ZminusState']:
             dict0 = construct_exp_dict(mainq=qindex,runname=dict0['runname'], device=device, pstate=p, mbasis='obsZ',
                                        circuitPath=circuitPath,spec_num=spec_num)
             write_measurement_error_mitigation_qasm(p, 'obsZ', exp_dict=dict0)
-        # DD circtuis
-        # for r in range(num_complete, num_repetition):
-        #     numDDgates = sampling_rate * r
-        #     for mbasis in measurement_basis:
-        #         dict0 = construct_dd_exp_dict(mainq=qindex,device=device, pstate=pstate, mbasis=mbasis,
-        #                                       circuitPath=circuitPath, numDDrep=numDDgates)
-        #         write_state_tomo_dd_on_spectator_qasms(exp_dict=dict0)
-        # for p in ['ZplusState', 'ZminusState']:
-        #     dict0 = construct_exp_dict(mainq=qindex,runname=dict0['runname'], device=device, pstate=p, mbasis='obsZ',
-        #                                circuitPath=circuitPath)
-        #     write_measurement_error_mitigation_qasm(p, 'obsZ', exp_dict=dict0)
 pkeys5 = ['XplusState', 'XminusState', 'YplusState', 'YminusState',  'ZminusState']
 pkeyr = 'randomState'
 # a new config: 4 tetrahegron states and 1 random state
@@ -529,10 +601,10 @@ nonMark_keys = ['XplusState','XminusState','tetra0','YplusState','YminusState']
 spec_states = ['ZplusState','ZminusState','XplusState']
 def main():
     for s in spec_states:
-        for p in nonMark_keys:
+        for p in trkeys:
             pstates = {'main': p,
                        'spec': s}
-            write_free_and_dd_w_spectators(qindex=0,pstate=pstates,spec_num=4, reverse=True)
+            write_free_and_dd_w_spectators(qindex=0,pstate=pstates,spec_num=4, reverse=False, include_dd=True)
 
 
 if __name__ == "__main__":
